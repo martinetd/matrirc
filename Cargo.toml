@@ -1,0 +1,20 @@
+[package]
+name = "matrirc"
+edition = "2018"
+version = "0.0.0"
+description = "An ircd to matrix gateway"
+authors = ["Dominique Martinet <asmadeus@codewreck.org>"]
+license = "WTFPLv2"
+keywords = ["irc", "matrix"]
+categories = ["command-line-utilities"]
+repository = "https://github.com/martinetd/matrirc"
+readme = "README.md"
+
+[dependencies]
+env_logger = "0.7"
+anyhow = "1.0"
+futures = "0.3"
+log = "0.4"
+irc = "0.14"
+tokio = { version = "0.2", features = ["net", "stream", "tcp"] }
+tokio-util = "0.3"
