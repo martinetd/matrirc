@@ -11,6 +11,8 @@ repository = "https://github.com/martinetd/matrirc"
 readme = "README.md"
 
 [dependencies]
+dirs = "3.0"
+dotenv = "0.15"
 env_logger = "0.7"
 anyhow = "1.0"
 futures = "0.3"

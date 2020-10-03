@@ -33,6 +33,11 @@ use tokio_util::codec::{Decoder, Framed};
 #[tokio::main]
 async fn main() {
     env_logger::init();
+    let my_path = dirs::config_dir().and_then(|a| Some(a.join("matrirc/config"))).unwrap();
+    if let Err(e) = dotenv::from_path(my_path.as_path()) {
+        debug!("Could not init dotenv file at {:?} : {}", my_path, e);
+    }
+
     while let Err(e) = main_impl().await {
         error!("Error: {:?}", e);
     }
