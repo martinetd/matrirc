@@ -44,9 +44,16 @@ async fn main() {
 }
 
 async fn main_impl() -> Result<()> {
-    let mut listener = TcpListener::bind("[::1]:6667").await?;
+    // ircd side init
+    let ircd = ircd_init();
+    ircd.await;
+    Ok(())
+}
+
+async fn ircd_init() -> tokio::task::JoinHandle<()> {
+    let mut listener = TcpListener::bind("[::1]:6667").await.context("bind ircd port").unwrap();
     info!("listening on localhost:6667");
-    let accept_task = tokio::spawn(async move {
+    tokio::spawn(async move {
         while let Ok((socket, addr)) = listener.accept().await {
           info!("accepted connection from {}", addr);
           let codec = IrcCodec::new("utf-8").unwrap();
@@ -56,9 +63,7 @@ async fn main_impl() -> Result<()> {
           });
         }
         info!("listener died");
-    });
-    accept_task.await?;
-    Ok(())
+    })
 }
 
 async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
