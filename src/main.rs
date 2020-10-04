@@ -25,6 +25,8 @@ extern crate dialoguer;
 
 use anyhow::{Result, Context, Error};
 use futures::prelude::*;
+use tokio::sync::mpsc;
+use std::collections::HashMap;
 
 // ircd stuff
 use irc::client::prelude::*;
@@ -70,7 +72,16 @@ async fn main_impl() -> Result<()> {
 }
 
 
-struct EventCallback;
+struct EventCallback {
+    client: Client,
+    toirc: mpsc::Sender<Message>,
+}
+
+impl EventCallback {
+    pub fn new(client: Client, toirc: mpsc::Sender<Message>) -> Self {
+        Self { client, toirc }
+    }
+}
 
 #[async_trait]
 impl EventEmitter for EventCallback {
@@ -90,13 +101,16 @@ impl EventEmitter for EventCallback {
                     (member.name(), room.display_name())
                 };
                 println!("{}: <{}> {}", roomname, username, msg_body);
+                // XXX sanitize names
+                // XXX if backlog (somehow check?) get and send timestamps
+                self.toirc.clone().send(irc_raw_msg(format!(":{}!none@none PRIVMSG {} :{}", username, roomname, msg_body))).await.unwrap();
             }
         }
     }
 }
 
 
-async fn matrix_init() -> matrix_sdk::Client {
+async fn matrix_init(toirc: mpsc::Sender<Message>) -> matrix_sdk::Client {
     let homeserver = dotenv::var("HOMESERVER").context("HOMESERVER is not set").unwrap();
     let store_path = match dotenv::var("STORE_PATH") {
         Ok(path) => PathBuf::from(&path),
@@ -107,7 +121,7 @@ async fn matrix_init() -> matrix_sdk::Client {
     let homeserver_url = Url::parse(&homeserver).expect("Couldn't parse the homeserver URL");
     let mut client = Client::new_with_config(homeserver_url, client_config).unwrap();
 
-    client.add_event_emitter(Box::new(EventCallback)).await;
+    client.add_event_emitter(Box::new(EventCallback::new(client.clone(), toirc))).await;
 
     if let Ok(access_token) = dotenv::var("ACCESS_TOKEN") {
         let user_id = dotenv::var("USER_ID").context("USER_ID not defined when ACCESS_TOKEN is").unwrap();
@@ -222,42 +236,96 @@ fn irc_msg(command: Command) -> Message {
     }
 }
 
-fn irc_join_msg(irc_nick: &str, irc_user: &str, channel: &str) -> Message {
+fn irc_join_msg(irc_nick: &str, irc_user: &str, chan: &str) -> Message {
     Message {
         tags: None,
         prefix: Some(Prefix::new_from_str(&format!("{}!{}@none", irc_nick, irc_user))),
-        command: Command::JOIN(channel.into(), None, None),
+        command: Command::JOIN(chan.into(), None, None),
     }
 }
 
 async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     // Check auth before doing anything else
     let (irc_nick, irc_user, stream) = irc_auth_loop(stream).await?;
-
-    // We're set, start matrix side of things
     let (mut writer, mut reader) = stream.split();
-    // let matrix_client = matrix_init().await;
-    // tokio::spawn(async move { matrix_client.sync_forever(SyncSettings::new(), |_| async {}).await });
+    writer.send(irc_raw_msg(format!(":{} 001 {} :Welcome to matrirc", "matrirc", irc_nick))).await?;
+
+    let (mut toirc, toirc_rx) = mpsc::channel::<Message>(100);
+    let (inick, iuser) = (irc_nick.clone(), irc_user.clone());
+    tokio::spawn(async move { irc_write_thread(&inick, &iuser, writer, toirc_rx).await });
+
+    // setup matrix things
+    let matrix_client = matrix_init(toirc.clone()).await;
 
     // We're now ready to handle the rest
-    writer.send(irc_raw_msg(format!(":{} 001 {} :Welcome to matrirc", "matrirc", irc_nick))).await?;
     //writer.send(irc_raw_msg(format!(":{} MODE {} :+iw", irc_nick, irc_nick))).await?;
 
-    // iterate channels and joins
-    writer.send(irc_join_msg(&irc_nick, &irc_user, "#test")).await?;
+    // initial matrix sync required for room list
+    matrix_client.sync(SyncSettings::new()).await?;
+
+    // iterate channels and join if requested
+    if let Ok(_) = dotenv::var("IRC_AUTOJOIN") {
+        for room in matrix_client.joined_rooms().read().await.values() {
+            toirc.send(irc_join_msg(&irc_nick, &irc_user, &room.read().await.display_name())).await?;
+            // for user in room.joined_members.values() {
+            //   :wolfe.freenode.net 332 asmatest #channame topic content
+            //   :wolfe.freenode.net 333 asmatest #channame topicauthor 1389652509
+            //   :wolfe.freenode.net 353 asmatest @ #channame :asmatest nick1 nick2 nick3
+            //   :wolfe.freenode.net 366 asmatest #channame :End of /NAMES list.
+            //   user.name()
+            // }
+        }
+    }
+
+    tokio::spawn(async move { matrix_client.sync_forever(SyncSettings::new(), |_| async {}).await });
 
     while let Some(Ok(event)) = reader.next().await {
         match event.command {
             Command::PING(e, o) => {
-                writer.send(irc_msg(Command::PONG(e, o))).await?;
+                // XXX if let Err(_) = ... { handle dropped
+                toirc.send(irc_msg(Command::PONG(e, o))).await?;
             }
             Command::QUIT(_) => {
-                writer.close().await?;
+                toirc.send(irc_msg(Command::QUIT(None))).await?;
+            }
+            Command::JOIN(chan, _, _) => {
+                toirc.send(irc_join_msg(&irc_nick, &irc_user, &chan)).await?;
             }
             _ => info!("got msg {:?}", event),
         }
     }
 
+    // XXX cleanup matrix at this point or reconnect won't work
     info!("disconnect event");
+    Ok(())
+}
+
+async fn irc_write_thread(irc_nick: &str, irc_user: &str, mut writer: futures::stream::SplitSink<Framed<TcpStream, IrcCodec>, Message>, mut toirc_rx: mpsc::Receiver<Message>) -> Result<()> {
+    let mut joined_chans = HashMap::new();
+    while let Some(message) = toirc_rx.recv().await {
+        // XXX clone because partial move... ugh.
+        match message.command.clone() {
+            Command::QUIT(_) => {
+                writer.close().await?;
+                return Ok(());
+            }
+            Command::JOIN(chan, _, _) => {
+                if !joined_chans.contains_key(&chan) {
+                    joined_chans.insert(chan, 0);
+                    writer.send(message).await?;
+                }
+            }
+            Command::PRIVMSG(chan, _) => {
+                if !joined_chans.contains_key(&chan) {
+                    joined_chans.insert(chan.clone(), 0);
+                    writer.send(irc_join_msg(&irc_nick, &irc_user, &chan)).await?;
+                }
+                writer.send(message).await?;
+            }
+            _ => {
+                writer.send(message).await?;
+            }
+        }
+    }
     Ok(())
 }
