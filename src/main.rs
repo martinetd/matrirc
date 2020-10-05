@@ -33,6 +33,7 @@ use std::sync::{Arc, RwLock, Mutex};
 // ircd stuff
 use irc::client::prelude::*;
 use irc::proto::IrcCodec;
+use irc::proto::error::ProtocolError;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Framed};
 
@@ -47,7 +48,8 @@ use matrix_sdk::{
 };
 use matrix_sdk_common::{
     identifiers::{UserId, RoomId},
-    api::r0::sync::sync_events::Response,
+    api::r0::sync::sync_events,
+    api::r0::message::send_message_event,
 };
 use std::convert::TryFrom;
 use std::convert::From;
@@ -134,30 +136,46 @@ impl Matrirc {
 
     pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>) -> Result<()> {
         while let Some(event) = stream.next().await {
-            let event = match event {
+            match self.handle_irc_event(event).await {
+                Ok(true) => (),
+                Ok(false) => break,
                 Err(e) => {
-                    debug!("got error {:?}", e);
-                    // XXX we get errors because of `MODE #chan` because :
-                    // InvalidModeString { string: "", cause: MissingModeModifier } }
-                    continue;
+                    debug!("Got an error handling irc event: {:?}", e);
                 }
-                Ok(event) => event,
-            };
-            match event.command {
-                Command::PING(e, o) => {
-                    debug!("PING {}", e);
-                    self.irc_send_cmd(None, Command::PONG(e, o)).await?;
-                }
-                Command::QUIT(_) => {
-                    debug!("IRC got quit");
-                    self.irc_send_cmd(None, Command::QUIT(None)).await?;
-                    break;
-                }
-                _ => debug!("got msg {:?}", event),
             }
         }
         debug!("got out of sync_forever irc");
         Ok(())
+    }
+    pub async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
+        let event = event.context("protocol error")?;
+        match event.command {
+            Command::PING(e, o) => {
+                debug!("PING {}", e);
+                self.irc_send_cmd(None, Command::PONG(e, o)).await?;
+            }
+            Command::QUIT(_) => {
+                debug!("IRC got quit");
+                self.irc_send_cmd(None, Command::QUIT(None)).await?;
+                return Ok(false);
+            }
+            Command::PRIVMSG(chan, body) => {
+                // should use event.response_target(), but we do not deal with any query
+                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
+                if let Some(action) = body.strip_prefix("\x01ACTION").and_then(|s| { s.strip_suffix("\x01") }) {
+                    self.matrix_room_send_emote(&room_id, action.into()).await?;
+                } else {
+                    self.matrix_room_send_text(&room_id, body).await?;
+                }
+            }
+            Command::NOTICE(chan, body) => {
+                // should use event.response_target(), but we do not deal with any query
+                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
+                self.matrix_room_send_notice(&room_id, body).await?;
+            }
+            _ => debug!("got msg {:?}", event),
+        };
+        Ok(true)
     }
 
     /// build list of chan members and join
@@ -227,7 +245,39 @@ impl Matrirc {
         self.irc_send_cmd(Some(prefix), Command::NOTICE(target.into(), message.into())).await
     }
 
-    pub async fn handle_matrix_events(&self, response: Response) -> Result<()> {
+    pub async fn matrix_room_send_text(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Text(
+                TextMessageEventContent {
+                    body,
+                    formatted: None,
+                    relates_to: None,
+                },
+        ));
+        Ok(self.matrix_client.room_send(&room_id, response, None).await?)
+    }
+
+    pub async fn matrix_room_send_notice(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Notice(
+                NoticeMessageEventContent {
+                    body,
+                    formatted: None,
+                    relates_to: None,
+                },
+        ));
+        Ok(self.matrix_client.room_send(&room_id, response, None).await?)
+    }
+
+    pub async fn matrix_room_send_emote(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Emote(
+                EmoteMessageEventContent {
+                    body,
+                    formatted: None,
+                },
+        ));
+        Ok(self.matrix_client.room_send(&room_id, response, None).await?)
+    }
+
+    pub async fn handle_matrix_events(&self, response: sync_events::Response) -> Result<()> {
         for (room_id, room) in response.rooms.join {
             for event in room.timeline.events {
                 if let Ok(event) = event.deserialize() {
@@ -266,6 +316,12 @@ impl Matrirc {
         }
 
         Ok(())
+    }
+
+    pub async fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
+        let map_locked = self.irc.chans.read().unwrap();
+        let chan = map_locked.get(chan)?;
+        Some(chan.room_id.clone())
     }
 
     pub async fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
