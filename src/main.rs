@@ -292,40 +292,9 @@ impl Matrirc {
 
     pub async fn handle_matrix_events(&self, response: sync_events::Response) -> Result<()> {
         for (room_id, room) in response.rooms.join {
-            for event in room.timeline.events {
-                if let Ok(event) = event.deserialize() {
-                    if let AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) = event {
-                        let SyncMessageEvent {
-                            content,
-                            sender,
-                            origin_server_ts,
-                            ..
-                        } = ev;
-                        let chan = self.matrix_room2irc_chan(&room_id).await;
-                        let nick = self.matrix_sender2irc_nick(&chan, &sender).await;
-                        let sender = format!("{}!{}@matrirc", nick, nick);
-                        // XXX parse origin_server_ts and prefix message with <timestamp> if
-                        // older than X
-                        match content {
-                            MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
-                                self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
-                            }
-                            MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
-                                self.irc_send_notice(&sender, &chan, &msg_body).await?;
-                            }
-                            MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
-                                let msg_body = format!("\x01ACTION {}\x01", msg_body);
-                                self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
-                            }
-                            _ => {
-                                debug!("other content? {:?}", content)
-                            }
-                        }
-                    } else {
-                        debug!("other event? {:?}", event);
-                    }
-                } else {
-                    warn!("Could not deserialize {:?}", event);
+            for event in &room.timeline.events {
+                if let Err(e) = self.handle_matrix_room_timeline_event(&room_id, event).await {
+                    warn!("room timeline event error: {:?}", e);
                 }
             }
         }
@@ -335,6 +304,39 @@ impl Matrirc {
             }
         }
 
+        Ok(())
+    }
+
+    pub async fn handle_matrix_room_timeline_event(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
+        let event = raw_event.deserialize()?;
+        match event {
+            AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
+                let SyncMessageEvent { content, sender, origin_server_ts, .. } = ev;
+                let chan = self.matrix_room2irc_chan(&room_id).await;
+                let nick = self.matrix_sender2irc_nick(&chan, &sender).await;
+                let sender = format!("{}!{}@matrirc", nick, nick);
+                // XXX parse origin_server_ts and prefix message with <timestamp> if
+                // older than X
+                match content {
+                    MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
+                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                    }
+                    MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
+                    }
+                    MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
+                        let msg_body = format!("\x01ACTION {}\x01", msg_body);
+                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                    }
+                    _ => {
+                        debug!("other content? {:?}", content)
+                    }
+                }
+            }
+            _  => {
+                    debug!("unhandled room timeline event {:?}", event);
+            }
+        }
         Ok(())
     }
     pub async fn handle_matrix_device_event(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
