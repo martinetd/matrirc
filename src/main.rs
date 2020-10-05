@@ -190,11 +190,22 @@ impl Matrirc {
         self.irc_send_cmd(Some(&self.irc.mask), Command::JOIN(chan.clone(), None, None)).await?;
 
         // build member list
-        let mut chan_members2nick = HashMap::new();
-        let mut chan_nicks2id = HashMap::new();
+        let mut chan_members2nick = HashMap::<UserId, String>::new();
+        let mut chan_nicks2id = HashMap::<String, UserId>::new();
         let names_list_header = format!(":matrirc 353 {} = {} :", self.irc.nick, chan);
         let mut names_list = names_list_header.clone();
+        let self_user_id = &self.matrix_client.user_id().await.unwrap();
+        {
+            // insert self first to reserve nick
+            names_list.push_str(&self.irc.nick);
+            names_list.push(' ');
+            chan_nicks2id.insert(self.irc.nick.to_string().clone(), self_user_id.clone());
+            chan_members2nick.insert(self_user_id.clone(), self.irc.nick.to_string().clone());
+        }
         for (member_id, member) in room.joined_members.iter() {
+            if member_id == self_user_id {
+                continue;
+            }
             let member_name = match &member.display_name {
                 Some(name) => name.clone(),
                 None => member.name(),
