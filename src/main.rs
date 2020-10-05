@@ -162,7 +162,7 @@ impl Matrirc {
             Command::PRIVMSG(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
                 let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
-                if let Some(action) = body.strip_prefix("\x01ACTION").and_then(|s| { s.strip_suffix("\x01") }) {
+                if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
                     self.matrix_room_send_emote(&room_id, action.into()).await?;
                 } else {
                     self.matrix_room_send_text(&room_id, body).await?;
@@ -301,7 +301,7 @@ impl Matrirc {
                                 self.irc_send_notice(&sender, &chan, &msg_body).await?;
                             }
                             MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
-                                // action = ^AACTION...^A where ^A is \1
+                                let msg_body = format!("\x01ACTION {}\x01", msg_body);
                                 self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
                             }
                             _ => {
