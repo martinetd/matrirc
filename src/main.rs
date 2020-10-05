@@ -40,7 +40,7 @@ use tokio_util::codec::{Decoder, Framed};
 use matrix_sdk::{
     self,
     events::{
-        room::message::{MessageEventContent, TextMessageEventContent},
+        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent, EmoteMessageEventContent},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
     },
     Client, ClientConfig, EventEmitter, SyncRoom, SyncSettings, Session, Room,
@@ -136,7 +136,7 @@ impl Matrirc {
         while let Some(event) = stream.next().await {
             let event = match event {
                 Err(e) => {
-                    info!("got error {:?}", e);
+                    debug!("got error {:?}", e);
                     // XXX we get errors because of `MODE #chan` because :
                     // InvalidModeString { string: "", cause: MissingModeModifier } }
                     continue;
@@ -153,7 +153,7 @@ impl Matrirc {
                     self.irc_send_cmd(None, Command::QUIT(None)).await?;
                     break;
                 }
-                _ => info!("got msg {:?}", event),
+                _ => debug!("got msg {:?}", event),
             }
         }
         debug!("got out of sync_forever irc");
@@ -222,38 +222,69 @@ impl Matrirc {
     pub async fn irc_send_privmsg(&self, prefix: &str, target: &str, message: &str) -> Result<()> {
         self.irc_send_cmd(Some(prefix), Command::PRIVMSG(target.into(), message.into())).await
     }
+    /// helper for notice
+    pub async fn irc_send_notice(&self, prefix: &str, target: &str, message: &str) -> Result<()> {
+        self.irc_send_cmd(Some(prefix), Command::NOTICE(target.into(), message.into())).await
+    }
 
     pub async fn handle_matrix_events(&self, response: Response) -> Result<()> {
         for (room_id, room) in response.rooms.join {
             for event in room.timeline.events {
                 if let Ok(event) = event.deserialize() {
                     if let AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) = event {
-                        if let SyncMessageEvent {
-                            content: MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }),
+                        let SyncMessageEvent {
+                            content,
                             sender,
                             origin_server_ts,
                             ..
-                        } = ev
-                        {
-                            let channame = self.roomid2chan.read().unwrap().get(&room_id).unwrap().clone();
-                            let nick = {
-                                let chans = self.irc.chans.read().unwrap();
-                                let chan = chans.get(&channame).unwrap();
-                                match chan.members2nick.get(&sender) {
-                                    Some(nick) => nick.clone(),
-                                    None => sender.to_string(),
-                                }
-                            };
-                            // XXX parse origin_server_ts and prefix message with <timestamp> if
-                            // older than X
-                            self.irc_send_privmsg(&format!("{}!{}@matrirc", nick, nick), &channame, &msg_body).await?;
-                        };
+                        } = ev;
+                        let chan = self.matrix_room2irc_chan(&room_id).await;
+                        let nick = self.matrix_sender2irc_nick(&chan, &sender).await;
+                        let sender = format!("{}!{}@matrirc", nick, nick);
+                        // XXX parse origin_server_ts and prefix message with <timestamp> if
+                        // older than X
+                        match content {
+                            MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
+                                self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                            }
+                            MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
+                                self.irc_send_notice(&sender, &chan, &msg_body).await?;
+                            }
+                            MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
+                                // action = ^AACTION...^A where ^A is \1
+                                self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                            }
+                            _ => {
+                                debug!("other content? {:?}", content)
+                            }
+                        }
+                    } else {
+                        debug!("other event? {:?}", event);
                     }
                 }
             }
         }
 
         Ok(())
+    }
+
+    pub async fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
+        let map_locked = self.roomid2chan.read().unwrap();
+        match map_locked.get(room_id) {
+            Some(chan) => chan.clone(),
+            None => "&matrirc".to_string(),
+        }
+    }
+    pub async fn matrix_sender2irc_nick(&self, chan: &str, sender: &UserId) -> String {
+        let map_locked = self.irc.chans.read().unwrap();
+        let chan = match map_locked.get(chan) {
+            Some(chan) => chan,
+            None => return sender.to_string(),
+        };
+        match chan.members2nick.get(sender) {
+            Some(nick) => nick.clone(),
+            None => sender.to_string(),
+        }
     }
 }
 
