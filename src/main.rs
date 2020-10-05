@@ -174,15 +174,21 @@ impl Matrirc {
                 // should use event.response_target(), but we do not deal with any query
                 let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
                 if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
-                    self.matrix_room_send_emote(&room_id, action.into()).await?;
+                    if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+                    }
                 } else {
-                    self.matrix_room_send_text(&room_id, body).await?;
+                    if let Err(e) = self.matrix_room_send_text(&room_id, body).await {
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+                    }
                 }
             }
             Command::NOTICE(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
                 let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
-                self.matrix_room_send_notice(&room_id, body).await?;
+                if let Err(e) = self.matrix_room_send_notice(&room_id, body).await {
+                    self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+                }
             }
             _ => debug!("got msg {:?}", event),
         };
