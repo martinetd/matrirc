@@ -97,7 +97,7 @@ struct Chan {
     /// nick to matrix user id
     /// XXX irc nick to UserId could be implemented to retranscript hilights
     /// to proper matrix hilight later
-    nicks2id: HashMap<String, UserId>,
+    _nicks2id: HashMap<String, UserId>,
 }
 
 #[derive(Clone)]
@@ -243,7 +243,7 @@ impl Matrirc {
         self.irc.chans.write().unwrap().insert(chan, Chan {
             room_id: room.room_id,
             members2nick: chan_members2nick,
-            nicks2id: chan_nicks2id,
+            _nicks2id: chan_nicks2id,
         });
         Ok(())
     }
@@ -402,7 +402,7 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_room_state_event(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
+    pub async fn handle_matrix_room_state_event(&self, _room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         match event {
             // XXX handle stuff.
