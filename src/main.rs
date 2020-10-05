@@ -43,8 +43,10 @@ use matrix_sdk::{
     events::{
         room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent, EmoteMessageEventContent},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
+        AnyToDeviceEvent,
     },
     Client, ClientConfig, EventEmitter, SyncRoom, SyncSettings, Session, Room,
+    Sas,
 };
 use matrix_sdk_common::{
     identifiers::{UserId, RoomId},
@@ -311,11 +313,81 @@ impl Matrirc {
                     } else {
                         debug!("other event? {:?}", event);
                     }
+                } else {
+                    warn!("Could not deserialize {:?}", event);
                 }
+            }
+        }
+        for event in &response.to_device.events {
+            if let Err(e) = self.handle_matrix_device_event(event).await {
+                warn!("device event error: {:?}", e);
             }
         }
 
         Ok(())
+    }
+    pub async fn handle_matrix_device_event(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
+        let event = raw_event.deserialize()?;
+        match event {
+            AnyToDeviceEvent::KeyVerificationStart(e) => {
+                let sas = self.matrix_client.get_verification(&e.content.transaction_id).await
+                    .context("Get verification for start event")?;
+
+                info!("Starting verification with {} {}",
+                      &sas.other_device().user_id(),
+                      &sas.other_device().device_id()
+                );
+                sas.accept().await?;
+            }
+            AnyToDeviceEvent::KeyVerificationKey(e) => {
+                let sas = self.matrix_client.get_verification(&e.content.transaction_id).await
+                    .context("Get verification for key event")?;
+
+                tokio::spawn(self.clone().confirm_key_verification(sas));
+            }
+            AnyToDeviceEvent::KeyVerificationMac(e) => {
+                let sas = self.matrix_client.get_verification(&e.content.transaction_id).await
+                    .context("Get verification for mac event")?;
+
+                if sas.is_done() {
+                    let device = sas.other_device();
+
+                    info!("Successfully verified device {} {} {:?}",
+                          device.user_id(), device.device_id(), device.trust_state());
+                } else {
+                    info!("Key Verification Mac failed?");
+                }
+
+            }
+            // [2020-10-05T12:50:18Z DEBUG matrirc] unhandled event: RoomKeyRequest(ToDeviceEvent { content: RoomKeyRequestEventContent { action: Request, body: Some(RequestedKeyInfo { algorithm: MegolmV1AesSha2, room_id: RoomId { full_id: "!roomid", colon_idx: 19 }, sender_key: "xxx", session_id: "xxx" }), requesting_device_id: DeviceId("xxx"), request_id: "xxx" }, sender: UserId { full_id: "xxx", colon_idx: 9, is_historical: false } })
+            // XXX handle when todo gone from sdk?
+            e => {
+                debug!("unhandled event: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn confirm_key_verification(self, sas: Sas) -> Result<()> {
+        println!("Do the emoji match? {:?}", sas.emoji());
+
+        if dialoguer::Confirm::new().with_prompt("Accept verification?").interact()? {
+            println!("Confirming verification...");
+            sas.confirm().await?;
+
+            if sas.is_done() {
+                let device = sas.other_device();
+
+                info!("Successfully verified device {} {} {:?}",
+                      device.user_id(), device.device_id(), device.trust_state());
+            }
+
+            Ok(())
+        } else {
+            println!("Aborting verification");
+
+            sas.cancel().await.context("could not disable verification")
+        }
     }
 
     pub async fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
