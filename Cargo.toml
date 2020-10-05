@@ -26,3 +26,4 @@ matrix-sdk-common-macros = { version = "0.1.0", git = "https://github.com/matrix
 async-trait = "0.1"
 url = "2.1"
 dialoguer = "0.6"
+chrono = "0.4"
