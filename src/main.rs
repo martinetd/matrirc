@@ -133,18 +133,30 @@ impl Matrirc {
     }
 
     pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>) -> Result<()> {
-        while let Some(Ok(event)) = stream.next().await {
+        while let Some(event) = stream.next().await {
+            let event = match event {
+                Err(e) => {
+                    info!("got error {:?}", e);
+                    // XXX we get errors because of `MODE #chan` because :
+                    // InvalidModeString { string: "", cause: MissingModeModifier } }
+                    continue;
+                }
+                Ok(event) => event,
+            };
             match event.command {
                 Command::PING(e, o) => {
+                    debug!("PING {}", e);
                     self.irc_send_cmd(None, Command::PONG(e, o)).await?;
                 }
                 Command::QUIT(_) => {
+                    debug!("IRC got quit");
                     self.irc_send_cmd(None, Command::QUIT(None)).await?;
                     break;
                 }
                 _ => info!("got msg {:?}", event),
             }
         }
+        debug!("got out of sync_forever irc");
         Ok(())
     }
 
