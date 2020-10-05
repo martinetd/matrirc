@@ -170,6 +170,20 @@ impl Matrirc {
                 self.irc_send_cmd(None, Command::QUIT(None)).await?;
                 return Ok(false);
             }
+            // XXX after joining a chan, we get a `MODE #chan` query but that currently
+            // parses as invalid Message.
+            // Normal chan joining exchange:
+            // -> :usermask JOIN #chan
+            // <- MODE #chan
+            // -> :matrirc 324 nick #chan +
+            // -> :matrirc 329 nick #chan 1601930643 // chan creation timestamp, optional
+            // <- WHO #chan
+            // -> :matrirc 352 nick #chan someusername someip someserver somenick H :0 Real Name
+            // (repeat for each user -- apparently ok to just skip to the end.)
+            // (H = here or G = gone (away), * = oper, @ = chanop, + = voice)
+            // -> :matrirc 315 nick #chan :End
+            // <- MODE #bar b
+            // -> :matrirc 368 nick #chan :End
             Command::PRIVMSG(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
                 let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
