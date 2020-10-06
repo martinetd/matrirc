@@ -382,29 +382,29 @@ impl Matrirc {
                         }
                     }
                     MessageEventContent::Audio(_) => {
-                        let msg_body = "<Sent an audio>";
+                        let msg_body = format!("{} sent audio", nick);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts);
-                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::File(_) => {
-                        let msg_body = "<Sent a file>";
+                        let msg_body = format!("{} sent a file", nick);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts);
-                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Image(_) => {
-                        let msg_body = "<Sent an image>";
+                        let msg_body = format!("{} sent an image", nick);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts);
-                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Location(_) => {
-                        let msg_body = "<Sent a location>";
+                        let msg_body = format!("{} sent a location", nick);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts);
-                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Video(_) => {
-                        let msg_body = "<Sent a video>";
+                        let msg_body = format!("{} sent a video", nick);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts);
-                        self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     _ => {
                         debug!("other content? {:?}", content)
