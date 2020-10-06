@@ -20,9 +20,9 @@ log = "0.4"
 irc = "0.14"
 tokio = { version = "0.2", features = ["net", "stream", "tcp"] }
 tokio-util = "0.3"
-matrix-sdk = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "b58d88e0c3a7be1d6759465854619d8f6f788937" }
-matrix-sdk-common = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "b58d88e0c3a7be1d6759465854619d8f6f788937" }
-matrix-sdk-common-macros = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "b58d88e0c3a7be1d6759465854619d8f6f788937"}
+matrix-sdk = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "f4137c6bbaeeb4a50e8ccaa485bb293d828cb177" }
+matrix-sdk-common = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "f4137c6bbaeeb4a50e8ccaa485bb293d828cb177" }
+matrix-sdk-common-macros = { version = "0.1.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "f4137c6bbaeeb4a50e8ccaa485bb293d828cb177" }
 async-trait = "0.1"
 url = "2.1"
 dialoguer = "0.6"

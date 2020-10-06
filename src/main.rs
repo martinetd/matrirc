@@ -1,4 +1,4 @@
-#![type_length_limit="1072404"]
+#![type_length_limit="2048000"]
 
 extern crate env_logger;
 extern crate anyhow;
@@ -20,7 +20,7 @@ use std::sync::{Arc, RwLock, Mutex};
 use chrono::offset::Local;
 use chrono::DateTime;
 use std::time::SystemTime;
-
+use tokio::time::{delay_for, Duration};
 
 // ircd stuff
 use irc::client::prelude::*;
@@ -134,7 +134,7 @@ impl Matrirc {
         }
     }
 
-    pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>) -> Result<()> {
+    pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>) {
         while let Some(event) = stream.next().await {
             match self.handle_irc_event(event).await {
                 Ok(true) => (),
@@ -144,8 +144,6 @@ impl Matrirc {
                 }
             }
         }
-        debug!("got out of sync_forever irc");
-        Ok(())
     }
     pub async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
         let event = event.context("protocol error")?;
@@ -155,8 +153,6 @@ impl Matrirc {
                 self.irc_send_cmd(None, Command::PONG(e, o)).await?;
             }
             Command::QUIT(_) => {
-                debug!("IRC got quit");
-                self.irc_send_cmd(None, Command::QUIT(None)).await?;
                 return Ok(false);
             }
             // XXX after joining a chan, we get a `MODE #chan` query but that currently
@@ -267,8 +263,7 @@ impl Matrirc {
             tags: None,
             prefix: prefix.and_then(|p| { Some(Prefix::new_from_str(p)) }),
             command,
-        }).await?;
-        Ok(())
+        }).await.context("could not send to pipe to irc messages")
     }
     /// helper to send raw tex
     pub async fn irc_send_raw(&self, message: &str) -> Result<()> {
@@ -489,8 +484,8 @@ impl Matrirc {
                 if sas.is_done() {
                     let device = sas.other_device();
 
-                    info!("Successfully verified device {} {} {:?}",
-                          device.user_id(), device.device_id(), device.trust_state());
+                    info!("Successfully verified device {} {}",
+                          device.user_id(), device.device_id());
                 } else {
                     info!("Key Verification Mac failed?");
                 }
@@ -523,8 +518,8 @@ impl Matrirc {
             if sas.is_done() {
                 let device = sas.other_device();
 
-                info!("Successfully verified device {} {} {:?}",
-                      device.user_id(), device.device_id(), device.trust_state());
+                info!("Successfully verified device {} {}",
+                      device.user_id(), device.device_id());
             }
 
             Ok(())
@@ -670,12 +665,14 @@ async fn ircd_init() -> tokio::task::JoinHandle<()> {
     let mut listener = TcpListener::bind("[::1]:6667").await.context("bind ircd port").unwrap();
     info!("listening on localhost:6667");
     tokio::spawn(async move {
+        let matrix_running = Arc::new(RwLock::new(false));
         while let Ok((socket, addr)) = listener.accept().await {
           info!("accepted connection from {}", addr);
           let codec = IrcCodec::new("utf-8").unwrap();
           let stream = codec.framed(socket);
+          let matrix_lock = matrix_running.clone();
           tokio::spawn(async move {
-            handle_irc(stream).await
+            handle_irc(matrix_lock, stream).await
           });
         }
         info!("listener died");
@@ -740,7 +737,7 @@ fn irc_raw_msg(msg: String) -> Message {
     }
 }
 
-async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
+async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     // Check auth before doing anything else
     let (irc_nick, irc_user, stream) = irc_auth_loop(stream).await?;
     let (mut writer, reader) = stream.split();
@@ -748,11 +745,15 @@ async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
     tokio::spawn(async move { irc_write_thread(writer, toirc_rx).await });
 
+    while *matrix_running.read().unwrap() {
+        delay_for(Duration::from_secs(1)).await;
+    }
+    *matrix_running.write().unwrap() = true;
     // setup matrix things
     let matrix_client = matrix_init().await;
 
     // initial matrix sync required for room list
-    let matrix_response = matrix_client.sync(SyncSettings::new()).await?;
+    let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
     trace!("initial sync: {:#?}", matrix_response);
 
     let matrirc = Matrirc::new(irc_nick.clone(), format!("{}!{}@matrirc", irc_nick, irc_user), toirc, matrix_client.clone());
@@ -766,21 +767,26 @@ async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     }
 
     matrirc.handle_matrix_events(matrix_response).await?;
-    {
-        let mut initial_sync = matrirc.initial_sync.write().unwrap();
-        *initial_sync = false;
-    }
+    *matrirc.initial_sync.write().unwrap() = false;
+
     let matrirc_clone = matrirc.clone();
     tokio::spawn(async move {
-        matrix_client.sync_forever(SyncSettings::new(), |resp| async {
+        matrix_client.sync_with_callback(SyncSettings::new(), |resp| async {
             trace!("got {:#?}", resp);
             matrirc_clone.handle_matrix_events(resp).await.unwrap();
+            if *matrirc_clone.stop.read().unwrap() {
+                *matrix_running.write().unwrap() = true;
+                true
+            } else {
+                false
+            }
         }).await
     });
-    matrirc.sync_forever(reader).await?;
+    matrirc.sync_forever(reader).await;
 
-    // XXX cleanup matrix at this point or reconnect won't work
     info!("disconnect event");
+    *matrirc.stop.write().unwrap() = true;
+    matrirc.irc_send_cmd(None, Command::QUIT(None)).await?;
     Ok(())
 }
 
