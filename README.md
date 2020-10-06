@@ -16,7 +16,9 @@ Start one instance per user (might be subject to change)
 
 Config file in ~/.config/matrirc/config as en env file with keys:
 - `HOMESERVER`: url of the homeserver
-- `IRC_PASSWORD`: optional required PASS command to give
+- `IRC_PASSWORD`: optional required PASS command to give.
+Note that `:` in the irc-provided password will be used as a separator
+to read matrix store's pickle password from if given.
 - `ACCESS_TOKEN`, `USER_ID` and `DEVICE_ID` : as given the first time
 you login (first login without these declared will prompt for user
 and password)

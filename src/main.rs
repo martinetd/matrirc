@@ -624,7 +624,7 @@ impl Matrirc {
     }
 }
 
-async fn matrix_init() -> matrix_sdk::Client {
+async fn matrix_init(pickle_pass: Option<String>) -> matrix_sdk::Client {
     let homeserver = dotenv::var("HOMESERVER").context("HOMESERVER is not set").unwrap();
     let store_path = match dotenv::var("STORE_PATH") {
         Ok(path) => PathBuf::from(&path),
@@ -632,6 +632,10 @@ async fn matrix_init() -> matrix_sdk::Client {
     };
 
     let client_config = ClientConfig::new().store_path(store_path);
+    let client_config = match pickle_pass {
+        Some(pass) => client_config.passphrase(pass),
+        None => client_config,
+    };
     let homeserver_url = Url::parse(&homeserver).expect("Couldn't parse the homeserver URL");
     let client = Client::new_with_config(homeserver_url, client_config).unwrap();
 
@@ -680,14 +684,21 @@ async fn ircd_init() -> tokio::task::JoinHandle<()> {
     })
 }
 
-async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, String, Framed<TcpStream, IrcCodec>)> {
+async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, String, Option<String>, Framed<TcpStream, IrcCodec>)> {
     let mut authentified = if let Err(_) = dotenv::var("IRC_PASSWORD") { true } else { false };
     let mut irc_nick = None;
+    let mut pickle_pass = None;
     while let Some(Ok(event)) = stream.next().await {
         match event.command {
             Command::PASS(user_pass) => {
                 if let Ok(config_pass) = dotenv::var("IRC_PASSWORD") {
                     debug!("Checking password");
+                    let split: Vec<_> = user_pass.splitn(2, ':').collect();
+                    if split.len() == 2 {
+                        pickle_pass = Some(split[1].to_string());
+                    }
+                    let user_pass = split[0].to_string();
+
                     if user_pass == config_pass {
                         // XXX define some separator and set second half as picke passphrase
                         authentified = true;
@@ -721,7 +732,7 @@ async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(Strin
                     Some(nick) => nick,
                     None => user.clone(),
                 };
-                return Ok((nick, user, stream));
+                return Ok((nick, user, pickle_pass, stream));
             }
             _ => trace!("got preauth message {:?}", event),
         }
@@ -740,7 +751,7 @@ fn irc_raw_msg(msg: String) -> Message {
 
 async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     // Check auth before doing anything else
-    let (irc_nick, irc_user, stream) = irc_auth_loop(stream).await?;
+    let (irc_nick, irc_user, pickle_pass, stream) = irc_auth_loop(stream).await?;
     let (mut writer, reader) = stream.split();
     writer.send(irc_raw_msg(format!(":{} 001 {} :Welcome to matrirc", "matrirc", irc_nick))).await?;
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
@@ -751,7 +762,7 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     }
     *matrix_running.write().unwrap() = true;
     // setup matrix things
-    let matrix_client = matrix_init().await;
+    let matrix_client = matrix_init(pickle_pass).await;
 
     // initial matrix sync required for room list
     let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
