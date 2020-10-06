@@ -73,18 +73,14 @@ async fn main_impl() -> Result<()> {
 }
 
 fn sanitize_name<S: AsRef<str>>(s: S) -> String {
-    s.as_ref().replace(" ", "_")
+    s.as_ref().replace(" ", "_").replace("@", "")
 }
 
 struct Chan {
     /// matrix room id
     room_id: RoomId,
     /// joined members (includes yourself!), matrix UserId to nick in chan
-    members2nick: HashMap<UserId, String>,
-    /// nick to matrix user id
-    /// XXX irc nick to UserId could be implemented to retranscript hilights
-    /// to proper matrix hilight later
-    nicks2id: HashMap<String, UserId>,
+    members: HashMap<UserId, ()>,
 }
 
 #[derive(Clone)]
@@ -97,6 +93,10 @@ struct Irc {
     sink: Arc<Mutex<mpsc::Sender<Message>>>,
     /// index of channels and who is in
     chans: Arc<RwLock<HashMap<String, Chan>>>,
+    /// map of matrix user ids to nick
+    user_id2nick: Arc<RwLock<HashMap<UserId, String>>>,
+    /// map of irc nicks to matrix user ids
+    nick2user_id: Arc<RwLock<HashMap<String, UserId>>>,
 }
 
 #[derive(Clone)]
@@ -124,6 +124,8 @@ impl Matrirc {
                 mask: Arc::new(irc_mask),
                 sink: Arc::new(Mutex::new(sink)),
                 chans: Arc::new(RwLock::new(HashMap::<String, Chan>::new())),
+                user_id2nick: Arc::new(RwLock::new(HashMap::<UserId, String>::new())),
+                nick2user_id: Arc::new(RwLock::new(HashMap::<String, UserId>::new())),
             },
             matrix_client,
             initial_sync: Arc::new(RwLock::new(true)),
@@ -173,7 +175,7 @@ impl Matrirc {
             // -> :matrirc 368 nick #chan :End
             Command::PRIVMSG(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
+                let room_id = self.irc_chan2matrix_roomid(&chan).context("channel not found")?;
                 if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
                     if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
@@ -186,7 +188,7 @@ impl Matrirc {
             }
             Command::NOTICE(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
+                let room_id = self.irc_chan2matrix_roomid(&chan).context("channel not found")?;
                 if let Err(e) = self.matrix_room_send_notice(&room_id, body).await {
                     self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
                 }
@@ -210,41 +212,42 @@ impl Matrirc {
         self.irc_send_cmd(Some(&self.irc.mask), Command::JOIN(chan.clone(), None, None)).await?;
 
         // build member list
-        let mut chan_members2nick = HashMap::<UserId, String>::new();
-        let mut chan_nicks2id = HashMap::<String, UserId>::new();
+        let mut chan_members = HashMap::<UserId, ()>::new();
         let names_list_header = format!(":matrirc 353 {} = {} :", self.irc.nick, chan);
         let mut names_list = names_list_header.clone();
-        let self_user_id = &self.matrix_client.user_id().await.unwrap();
-        {
-            // insert self first to reserve nick
-            names_list.push_str(&self.irc.nick);
-            names_list.push(' ');
-            chan_nicks2id.insert(self.irc.nick.to_string().clone(), self_user_id.clone());
-            chan_members2nick.insert(self_user_id.clone(), self.irc.nick.to_string().clone());
-        }
+        // insert self first to reserve nick
+        names_list.push_str(&self.irc.nick);
+        names_list.push(' ');
+        let self_user_id = self.matrix_client.user_id().await.unwrap();
+        chan_members.insert(self_user_id.clone(), ());
         for (member_id, member) in room.joined_members.iter() {
-            if member_id == self_user_id {
+            if member_id.as_ref() == self_user_id {
                 continue;
             }
-            if member.display_name == None {
-                debug!("member: {:?}", member);
-            }
-            let member_name = match &member.display_name {
-                Some(name) => name.clone(),
-                None => member.name(),
+            let nick = match self.matrix_userid2irc_nick(&member_id) {
+                Some(nick) => nick, // XXX potentially update nick here
+                None => {
+                    if member.display_name == None {
+                        debug!("member: {:?}", member);
+                    }
+                    let mut nick = match &member.display_name {
+                        Some(name) => name.clone(),
+                        None => member.name(),
+                    };
+                    nick = sanitize_name(nick);
+                    while self.irc_nick2matrix_userid(&nick).is_some() {
+                        nick.push('_');
+                    }
+                    self.insert_userid_nick_maps(member_id, nick)
+                }
             };
-            let mut nick = sanitize_name(member_name);
-            while let Some(_) = chan_nicks2id.get(&nick) {
-                nick.push('_');
-            }
             names_list.push_str(&nick);
             names_list.push(' ');
             if names_list.len() > 400 {
                 self.irc_send_raw(&names_list).await?;
                 names_list = names_list_header.clone();
             }
-            chan_nicks2id.insert(nick.clone(), member_id.clone());
-            chan_members2nick.insert(member_id.to_owned(), nick);
+            chan_members.insert(member_id.to_owned(), ());
         }
         if names_list != names_list_header {
                 self.irc_send_raw(&names_list).await?;
@@ -253,8 +256,7 @@ impl Matrirc {
         self.roomid2chan.write().unwrap().insert(room.room_id.clone(), chan.clone());
         self.irc.chans.write().unwrap().insert(chan, Chan {
             room_id: room.room_id,
-            members2nick: chan_members2nick,
-            nicks2id: chan_nicks2id,
+            members: chan_members,
         });
         Ok(())
     }
@@ -316,18 +318,18 @@ impl Matrirc {
     pub async fn handle_matrix_events(&self, response: sync_events::Response) -> Result<()> {
         for (room_id, room) in response.rooms.join {
             for event in &room.state.events {
-                if let Err(e) = self.handle_matrix_room_state_event(&room_id, event).await {
+                if let Err(e) = self.handle_matrix_room_state_event_raw(&room_id, event).await {
                     warn!("room state event error: {:?}", e);
                 }
             }
             for event in &room.timeline.events {
-                if let Err(e) = self.handle_matrix_room_timeline_event(&room_id, event).await {
+                if let Err(e) = self.handle_matrix_room_timeline_event_raw(&room_id, event).await {
                     warn!("room timeline event error: {:?}", e);
                 }
             }
         }
         for event in &response.to_device.events {
-            if let Err(e) = self.handle_matrix_device_event(event).await {
+            if let Err(e) = self.handle_matrix_device_event_raw(event).await {
                 warn!("device event error: {:?}", e);
             }
         }
@@ -335,8 +337,9 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_room_timeline_event(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
+    pub async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
+        trace!("room timeline event {:?}", event);
         match event {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
                 let SyncMessageEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
@@ -344,8 +347,8 @@ impl Matrirc {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
                 }
-                let chan = self.matrix_room2irc_chan(&room_id).await;
-                let nick = self.matrix_userid2irc_nick(&chan, &sender).await;
+                let chan = self.matrix_room2irc_chan(&room_id);
+                let nick = self.matrix_userid2irc_nick_default(&sender);
                 let sender = format!("{}!{}@matrirc", nick, nick);
                 match content {
                     MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
@@ -399,12 +402,15 @@ impl Matrirc {
             }
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomEncrypted(ev)) => {
                 let SyncMessageEvent { sender, origin_server_ts: ts, .. } = ev;
-                let chan = self.matrix_room2irc_chan(&room_id).await;
-                let nick = self.matrix_userid2irc_nick(&chan, &sender).await;
+                let chan = self.matrix_room2irc_chan(&room_id);
+                let nick = self.matrix_userid2irc_nick_default(&sender);
                 let sender = format!("{}!{}@matrirc", nick, nick);
                 let msg_body = "Could not decrypt message";
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts);
                 self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
+            }
+            AnySyncRoomEvent::State(ev) => {
+                self.handle_matrix_room_state_event(room_id, ev).await?;
             }
             _  => {
                     debug!("unhandled room timeline event {:?}", event);
@@ -413,8 +419,13 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_room_state_event(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
+    pub async fn handle_matrix_room_state_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
+        trace!("room state event {:?}", event);
+        self.handle_matrix_room_state_event(room_id, event).await
+    }
+
+    pub async fn handle_matrix_room_state_event(&self, room_id: &RoomId, event: AnySyncStateEvent) -> Result<(), Error> {
         match event {
             AnySyncStateEvent::RoomCreate(_) => {
                 if let Some(room) = self.matrix_client.joined_rooms().read().await.get(room_id) {
@@ -427,19 +438,17 @@ impl Matrirc {
                     sender, .. } = ev;
                 match membership {
                     MembershipState::Leave => {
-                        let chan = self.matrix_room2irc_chan(room_id).await;
-                        let nick = self.matrix_userid2irc_nick(&chan, &sender).await;
+                        let chan = self.matrix_room2irc_chan(room_id);
+                        let nick = self.matrix_userid2irc_nick_default(&sender);
                         self.irc_send_cmd(Some(&format!("{}!{}@matrirc", nick, nick)), Command::PART(chan, None)).await?;
                     },
                     MembershipState::Join => {
                         let display_name = match displayname {
-                            Some(name) => sanitize_name(name),
+                            Some(name) => name,
                             None => sender.to_string(),
                         };
-                        let chan = self.matrix_room2irc_chan(room_id).await;
-                        if let Some((prefix, command)) = self.irc_member_join(&chan, &sender, &display_name).await {
-                            self.irc_send_cmd(Some(&prefix), command).await?;
-                        }
+                        let chan = self.matrix_room2irc_chan(room_id);
+                        self.irc_member_join(&chan, &sender, &display_name).await?;
                     }
                     _ => {
                         debug!("unknown membership {} for {} in {}", membership, sender, room_id);
@@ -453,8 +462,9 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_device_event(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
+    pub async fn handle_matrix_device_event_raw(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
+        trace!("device event {:?}", event);
         match event {
             AnyToDeviceEvent::KeyVerificationStart(e) => {
                 let sas = self.matrix_client.get_verification(&e.content.transaction_id).await
@@ -525,68 +535,97 @@ impl Matrirc {
         }
     }
 
-    pub async fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
+    pub fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
         let map_locked = self.irc.chans.read().unwrap();
         let chan = map_locked.get(chan)?;
         Some(chan.room_id.clone())
     }
 
-    pub async fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
+    pub fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
         let map_locked = self.roomid2chan.read().unwrap();
         match map_locked.get(room_id) {
             Some(chan) => chan.clone(),
             None => "&matrirc".to_string(),
         }
     }
-    pub async fn matrix_userid2irc_nick(&self, chan: &str, user_id: &UserId) -> String {
-        let map_locked = self.irc.chans.read().unwrap();
-        let chan = match map_locked.get(chan) {
-            Some(chan) => chan,
-            None => return user_id.to_string(),
-        };
-        match chan.members2nick.get(user_id) {
-            Some(nick) => nick.clone(),
-            None => user_id.to_string(),
-        }
+
+    /// insert new nick, preferring old one if found
+    pub fn insert_userid_nick_maps(&self, user_id: &UserId, nick: String) -> String {
+        let nick = self.irc.user_id2nick.write().unwrap()
+            .entry(user_id.clone())
+            .or_insert(nick)
+            .clone();
+        self.irc.nick2user_id.write().unwrap().
+            insert(nick.clone(), user_id.clone());
+        nick
     }
 
-    pub async fn _irc_nick2matrix_userid(&self, chan: &str, nick: &str) -> Option<UserId> {
-        let map_locked = self.irc.chans.read().unwrap();
-        let chan = map_locked.get(chan)?;
-        Some(chan.nicks2id.get(nick)?.clone())
+    /// insert anyway
+    /// XXX racy because two locks, but we can only be updated
+    /// from the matrix event handler thread... ideally merge locks later
+    pub fn update_userid_nick_maps(&self, user_id: &UserId, nick: String) {
+        if let Some(old_nick) = self.irc.user_id2nick.read().unwrap().get(user_id).clone() {
+            self.irc.nick2user_id.write().unwrap()
+                .remove(old_nick);
+        }
+        self.irc.user_id2nick.write().unwrap()
+            .insert(user_id.clone(), nick.clone());
+        self.irc.nick2user_id.write().unwrap()
+            .insert(nick.clone(), user_id.clone());
     }
 
-    pub async fn irc_member_join(&self, chan_name: &str, user_id: &UserId, new_nick: &str) -> Option<(String, Command)> {
-        let mut map_locked = self.irc.chans.write().unwrap();
-        let chan = map_locked.entry(chan_name.into());
-        let mut chan = match chan {
-            Entry::Vacant(_) => return None,
-            Entry::Occupied(chan) => chan,
-        };
-        let chan = chan.get_mut();
+    pub fn matrix_userid2irc_nick(&self, user_id: &UserId) -> Option<String> {
+        Some(self.irc.user_id2nick.read().unwrap().get(user_id)?.clone())
+    }
 
-        match chan.members2nick.entry(user_id.clone()) {
-            Entry::Occupied(mut nick) => {
-                // already in chan, rename if required
-                let nick = nick.get_mut();
-                if nick == new_nick {
-                    return None;
-                }
-                if chan.nicks2id.get(new_nick) != None {
-                    // tough luck!
-                    return None;
-                }
-                chan.nicks2id.remove(nick);
-                chan.nicks2id.insert(nick.clone(), user_id.clone());
-                *nick = new_nick.into();
-                return Some((format!("{}!{}@matrirc", nick, nick), Command::NICK(new_nick.into())));
+    pub fn matrix_userid2irc_nick_default(&self, user_id: &UserId) -> String {
+        self.irc.user_id2nick.read().unwrap().get(user_id)
+             .unwrap_or(&user_id.to_string()).clone()
+    }
+
+    pub fn irc_nick2matrix_userid(&self, nick: &str) -> Option<UserId> {
+        Some(self.irc.nick2user_id.read().unwrap().get(nick)?.clone())
+    }
+
+    pub async fn irc_member_join(&self, chan_name: &str, user_id: &UserId, nick: &str) -> Result<()> {
+        let nick = sanitize_name(nick);
+        match self.matrix_userid2irc_nick(user_id) {
+            None => {
+                self.update_userid_nick_maps(user_id, nick.clone());
             }
-            Entry::Vacant(nick) => {
-                chan.nicks2id.insert(new_nick.into(), user_id.clone());
-                nick.insert(new_nick.into());
-                return Some((format!("{}!{}@matrirc", new_nick, new_nick), Command::JOIN(chan_name.into(), None, None)));
+            Some(old_nick) => {
+                debug!("Considering rename {} to {}", old_nick, nick);
+                if old_nick.as_str() != nick &&
+                    self.irc_nick2matrix_userid(&nick).is_none() {
+                    self.update_userid_nick_maps(user_id, nick.clone());
+                    self.irc_send_cmd(Some(&format!("{}!{}@matrirc", old_nick, old_nick)), Command::NICK(nick.clone())).await?;
+                }
             }
         }
+
+        let join = {
+            let mut map_locked = self.irc.chans.write().unwrap();
+            let chan = map_locked.entry(chan_name.into());
+            let mut chan = match chan {
+                Entry::Vacant(_) => return Err(Error::msg("someone joining a chan we don't know?")),
+                Entry::Occupied(chan) => chan,
+            };
+            let chan = chan.get_mut();
+
+            match chan.members.entry(user_id.clone()) {
+                Entry::Occupied(_) => {
+                    false
+                }
+                Entry::Vacant(e) => {
+                    e.insert(());
+                    true
+                }
+            }
+        };
+        if join {
+            self.irc_send_cmd(Some(&format!("{}!{}@matrirc", nick, nick)), Command::JOIN(chan_name.into(), None, None)).await?;
+        }
+        Ok(())
     }
 }
 
@@ -717,6 +756,10 @@ async fn handle_irc(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     trace!("initial sync: {:#?}", matrix_response);
 
     let matrirc = Matrirc::new(irc_nick.clone(), format!("{}!{}@matrirc", irc_nick, irc_user), toirc, matrix_client.clone());
+
+    // XXX move that in new somehow but await..
+    let self_user_id = &matrirc.matrix_client.user_id().await.unwrap();
+    matrirc.update_userid_nick_maps(self_user_id, matrirc.irc.nick.to_string());
 
     for room in matrix_client.joined_rooms().read().await.values() {
         matrirc.irc_join_chan(room.read().await.clone()).await?;
