@@ -1,3 +1,4 @@
+#![type_length_limit="1072404"]
 
 extern crate env_logger;
 extern crate anyhow;
