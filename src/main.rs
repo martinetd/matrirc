@@ -662,7 +662,8 @@ async fn matrix_init() -> matrix_sdk::Client {
 }
 
 async fn ircd_init() -> tokio::task::JoinHandle<()> {
-    let mut listener = TcpListener::bind("[::1]:6667").await.context("bind ircd port").unwrap();
+    let bind_address = dotenv::var("IRCD_BIND_ADDRESS").unwrap_or("[::1]:6667".to_string());
+    let mut listener = TcpListener::bind(bind_address).await.context("bind ircd port").unwrap();
     info!("listening on localhost:6667");
     tokio::spawn(async move {
         let matrix_running = Arc::new(RwLock::new(false));

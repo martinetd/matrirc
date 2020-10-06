@@ -23,11 +23,14 @@ and password)
 
 # Todo
 
-- make ircd bind url configurable
 - see XXX in the code
 - either save matrix state along to keep from one connect to
 the next or cleanup properly when irc client disconnects
-- make a synthetic channel or user for e.g. device verifications, join notices etc
+   -> lock doesn't work well, probably want to keep state
+around just not syncing. will still need lock to not have
+parallel syncs....
+- make a synthetic channel or user for e.g. device verifications,
+invite notices etc
 - add a list of ignored channels user doesn't care about
 - handle m.reaction
 Message(Custom(SyncMessageEvent { content: CustomEventContent { event_type: "m.reaction", json: Object({"m.relates_to": Object({"event_id": String("xxx"), "key": String("😄"), "rel_type": String("m.annotation")})}) }, event_id: EventId { full_id: "xxx", colon_idx: None }, sender: UserId { full_id: "@xxx:matrix.xxx", colon_idx: 7, is_historical: false }, origin_server_ts: SystemTime { tv_sec: 1601823096, tv_nsec: 97000000 }, unsigned: Unsigned { age: Some(xxx), transaction_id: None } }))
