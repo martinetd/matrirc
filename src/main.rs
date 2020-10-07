@@ -88,8 +88,6 @@ struct Chan {
 struct Irc {
     /// irc nick
     nick: Arc<String>,
-    /// nick!user@host format
-    mask: Arc<String>,
     /// sink where to send irc messages to
     sink: Arc<Mutex<mpsc::Sender<Message>>>,
     /// index of channels and who is in
@@ -115,14 +113,12 @@ struct Matrirc {
 
 impl Matrirc {
     pub fn new(irc_nick: String,
-               irc_mask: String,
                sink: mpsc::Sender<Message>,
                matrix_client: Client,
                ) -> Matrirc {
         Matrirc {
             irc: Irc {
                 nick: Arc::new(irc_nick),
-                mask: Arc::new(irc_mask),
                 sink: Arc::new(Mutex::new(sink)),
                 chans: Arc::new(RwLock::new(HashMap::<String, Chan>::new())),
                 user_id2nick: Arc::new(RwLock::new(HashMap::<UserId, String>::new())),
@@ -206,7 +202,7 @@ impl Matrirc {
         while let Some(_) = self.irc.chans.read().await.get(&chan) {
             chan.push('_');
         }
-        self.irc_send_cmd(Some(&self.irc.mask), Command::JOIN(chan.clone(), None, None)).await?;
+        self.irc_send_cmd(Some(&self.irc.nick), Command::JOIN(chan.clone(), None, None)).await?;
 
         // build member list
         let mut chan_members = HashMap::<UserId, ()>::new();
@@ -344,8 +340,7 @@ impl Matrirc {
                     return Ok(());
                 }
                 let chan = self.matrix_room2irc_chan(&room_id).await;
-                let nick = self.matrix_userid2irc_nick_default(&sender).await;
-                let sender = format!("{}!{}@matrirc", nick, nick);
+                let sender = self.matrix_userid2irc_nick_default(&sender).await;
                 match content {
                     MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
@@ -367,27 +362,27 @@ impl Matrirc {
                         }
                     }
                     MessageEventContent::Audio(_) => {
-                        let msg_body = format!("{} sent audio", nick);
+                        let msg_body = format!("{} sent audio", sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::File(_) => {
-                        let msg_body = format!("{} sent a file", nick);
+                        let msg_body = format!("{} sent a file", sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Image(_) => {
-                        let msg_body = format!("{} sent an image", nick);
+                        let msg_body = format!("{} sent an image", sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Location(_) => {
-                        let msg_body = format!("{} sent a location", nick);
+                        let msg_body = format!("{} sent a location", sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Video(_) => {
-                        let msg_body = format!("{} sent a video", nick);
+                        let msg_body = format!("{} sent a video", sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
@@ -399,8 +394,7 @@ impl Matrirc {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomEncrypted(ev)) => {
                 let SyncMessageEvent { sender, origin_server_ts: ts, .. } = ev;
                 let chan = self.matrix_room2irc_chan(&room_id).await;
-                let nick = self.matrix_userid2irc_nick_default(&sender).await;
-                let sender = format!("{}!{}@matrirc", nick, nick);
+                let sender = self.matrix_userid2irc_nick_default(&sender).await;
                 let msg_body = "Could not decrypt message";
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
@@ -436,7 +430,7 @@ impl Matrirc {
                     MembershipState::Leave => {
                         let chan = self.matrix_room2irc_chan(room_id).await;
                         let nick = self.matrix_userid2irc_nick_default(&sender).await;
-                        self.irc_send_cmd(Some(&format!("{}!{}@matrirc", nick, nick)), Command::PART(chan, None)).await?;
+                        self.irc_send_cmd(Some(&nick), Command::PART(chan, None)).await?;
                     },
                     MembershipState::Join => {
                         let display_name = match displayname {
@@ -594,7 +588,7 @@ impl Matrirc {
                 if old_nick.as_str() != nick &&
                     self.irc_nick2matrix_userid(&nick).await.is_none() {
                     self.update_userid_nick_maps(user_id, nick.clone()).await;
-                    self.irc_send_cmd(Some(&format!("{}!{}@matrirc", old_nick, old_nick)), Command::NICK(nick.clone())).await?;
+                    self.irc_send_cmd(Some(&old_nick), Command::NICK(nick.clone())).await?;
                 }
             }
         }
@@ -619,7 +613,7 @@ impl Matrirc {
             }
         };
         if join {
-            self.irc_send_cmd(Some(&format!("{}!{}@matrirc", nick, nick)), Command::JOIN(chan_name.into(), None, None)).await?;
+            self.irc_send_cmd(Some(&nick), Command::JOIN(chan_name.into(), None, None)).await?;
         }
         Ok(())
     }
@@ -685,7 +679,7 @@ async fn ircd_init() -> tokio::task::JoinHandle<()> {
     })
 }
 
-async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, String, Option<String>, Framed<TcpStream, IrcCodec>)> {
+async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, Option<String>, Framed<TcpStream, IrcCodec>)> {
     let mut authentified = if let Err(_) = dotenv::var("IRC_PASSWORD") { true } else { false };
     let mut irc_nick = None;
     let mut pickle_pass = None;
@@ -731,9 +725,9 @@ async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(Strin
                 }
                 let nick = match irc_nick {
                     Some(nick) => nick,
-                    None => user.clone(),
+                    None => user,
                 };
-                return Ok((nick, user, pickle_pass, stream));
+                return Ok((nick, pickle_pass, stream));
             }
             _ => trace!("got preauth message {:?}", event),
         }
@@ -752,7 +746,7 @@ fn irc_raw_msg(msg: String) -> Message {
 
 async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     // Check auth before doing anything else
-    let (irc_nick, irc_user, pickle_pass, stream) = irc_auth_loop(stream).await?;
+    let (irc_nick, pickle_pass, stream) = irc_auth_loop(stream).await?;
     let (mut writer, reader) = stream.split();
     writer.send(irc_raw_msg(format!(":{} 001 {} :Welcome to matrirc", "matrirc", irc_nick))).await?;
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
@@ -769,7 +763,7 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
     trace!("initial sync: {:#?}", matrix_response);
 
-    let matrirc = Matrirc::new(irc_nick.clone(), format!("{}!{}@matrirc", irc_nick, irc_user), toirc, matrix_client.clone());
+    let matrirc = Matrirc::new(irc_nick.clone(), toirc, matrix_client.clone());
 
     // XXX move that in new somehow but await..
     let self_user_id = &matrirc.matrix_client.user_id().await.unwrap();
