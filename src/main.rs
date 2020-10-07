@@ -15,7 +15,8 @@ use futures::prelude::*;
 use tokio::sync::mpsc;
 use futures::stream::SplitStream;
 use std::collections::hash_map::{HashMap, Entry};
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::Arc;
+use tokio::sync::{RwLock, Mutex};
 
 use chrono::offset::Local;
 use chrono::DateTime;
@@ -145,7 +146,7 @@ impl Matrirc {
             }
         }
     }
-    pub async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
+    async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
         let event = event.context("protocol error")?;
         match event.command {
             Command::PING(e, o) => {
@@ -171,7 +172,7 @@ impl Matrirc {
             // -> :matrirc 368 nick #chan :End
             Command::PRIVMSG(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).context("channel not found")?;
+                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
                 if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
                     if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
@@ -184,7 +185,7 @@ impl Matrirc {
             }
             Command::NOTICE(chan, body) => {
                 // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).context("channel not found")?;
+                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
                 if let Err(e) = self.matrix_room_send_notice(&room_id, body).await {
                     self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
                 }
@@ -196,13 +197,13 @@ impl Matrirc {
 
     /// build list of chan members and join
     pub async fn irc_join_chan(&self, room: Room) -> Result<()> {
-        if self.roomid2chan.read().unwrap().get(&room.room_id) != None {
+        if self.roomid2chan.read().await.get(&room.room_id) != None {
             // already done
             return Ok(());
         }
         // find a suitable chan name
         let mut chan = format!("#{}", sanitize_name(room.display_name()));
-        while let Some(_) = self.irc.chans.read().unwrap().get(&chan) {
+        while let Some(_) = self.irc.chans.read().await.get(&chan) {
             chan.push('_');
         }
         self.irc_send_cmd(Some(&self.irc.mask), Command::JOIN(chan.clone(), None, None)).await?;
@@ -220,7 +221,7 @@ impl Matrirc {
             if member_id.as_ref() == self_user_id {
                 continue;
             }
-            let nick = match self.matrix_userid2irc_nick(&member_id) {
+            let nick = match self.matrix_userid2irc_nick(&member_id).await {
                 Some(nick) => nick, // XXX potentially update nick here
                 None => {
                     if member.display_name == None {
@@ -231,10 +232,10 @@ impl Matrirc {
                         None => member.name(),
                     };
                     nick = sanitize_name(nick);
-                    while self.irc_nick2matrix_userid(&nick).is_some() {
+                    while self.irc_nick2matrix_userid(&nick).await.is_some() {
                         nick.push('_');
                     }
-                    self.insert_userid_nick_maps(member_id, nick)
+                    self.insert_userid_nick_maps(member_id, nick).await
                 }
             };
             names_list.push_str(&nick);
@@ -249,8 +250,8 @@ impl Matrirc {
                 self.irc_send_raw(&names_list).await?;
         }
         self.irc_send_raw(&format!(":matrirc 366 {} {} :End", self.irc.nick, chan)).await?;
-        self.roomid2chan.write().unwrap().insert(room.room_id.clone(), chan.clone());
-        self.irc.chans.write().unwrap().insert(chan, Chan {
+        self.roomid2chan.write().await.insert(room.room_id.clone(), chan.clone());
+        self.irc.chans.write().await.insert(chan, Chan {
             room_id: room.room_id,
             members: chan_members,
         });
@@ -258,7 +259,7 @@ impl Matrirc {
     }
     /// helper to send custom Message
     pub async fn irc_send_cmd(&self, prefix: Option<&str>, command: Command) -> Result<()> {
-        let mut sink = self.irc.sink.lock().unwrap().clone();
+        let mut sink = self.irc.sink.lock().await.clone();
         sink.send(Message {
             tags: None,
             prefix: prefix.and_then(|p| { Some(Prefix::new_from_str(p)) }),
@@ -332,62 +333,62 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
+    async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         trace!("room timeline event {:?}", event);
         match event {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
                 let SyncMessageEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
-                if unsigned.transaction_id != None && ! *self.initial_sync.read().unwrap() {
+                if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
                 }
-                let chan = self.matrix_room2irc_chan(&room_id);
-                let nick = self.matrix_userid2irc_nick_default(&sender);
+                let chan = self.matrix_room2irc_chan(&room_id).await;
+                let nick = self.matrix_userid2irc_nick_default(&sender).await;
                 let sender = format!("{}!{}@matrirc", nick, nick);
                 match content {
                     MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
-                        let msg_body = self.body_prepend_ts(msg_body, ts);
+                        let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_privmsg(&sender, &chan, &line).await?;
                         }
                     }
                     MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
-                        let msg_body = self.body_prepend_ts(msg_body, ts);
+                        let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_notice(&sender, &chan, &line).await?;
                         }
                     }
                     MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = format!("\x01ACTION {}\x01", msg_body);
-                        let msg_body = self.body_prepend_ts(msg_body, ts);
+                        let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_privmsg(&sender, &chan, &line).await?;
                         }
                     }
                     MessageEventContent::Audio(_) => {
                         let msg_body = format!("{} sent audio", nick);
-                        let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                        let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::File(_) => {
                         let msg_body = format!("{} sent a file", nick);
-                        let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                        let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Image(_) => {
                         let msg_body = format!("{} sent an image", nick);
-                        let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                        let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Location(_) => {
                         let msg_body = format!("{} sent a location", nick);
-                        let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                        let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     MessageEventContent::Video(_) => {
                         let msg_body = format!("{} sent a video", nick);
-                        let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                        let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
                     }
                     _ => {
@@ -397,11 +398,11 @@ impl Matrirc {
             }
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomEncrypted(ev)) => {
                 let SyncMessageEvent { sender, origin_server_ts: ts, .. } = ev;
-                let chan = self.matrix_room2irc_chan(&room_id);
-                let nick = self.matrix_userid2irc_nick_default(&sender);
+                let chan = self.matrix_room2irc_chan(&room_id).await;
+                let nick = self.matrix_userid2irc_nick_default(&sender).await;
                 let sender = format!("{}!{}@matrirc", nick, nick);
                 let msg_body = "Could not decrypt message";
-                let msg_body = self.body_prepend_ts(msg_body.into(), ts);
+                let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
             }
             AnySyncRoomEvent::State(ev) => {
@@ -414,13 +415,13 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_room_state_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
+    async fn handle_matrix_room_state_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         trace!("room state event {:?}", event);
         self.handle_matrix_room_state_event(room_id, event).await
     }
 
-    pub async fn handle_matrix_room_state_event(&self, room_id: &RoomId, event: AnySyncStateEvent) -> Result<(), Error> {
+    async fn handle_matrix_room_state_event(&self, room_id: &RoomId, event: AnySyncStateEvent) -> Result<(), Error> {
         match event {
             AnySyncStateEvent::RoomCreate(_) => {
                 if let Some(room) = self.matrix_client.joined_rooms().read().await.get(room_id) {
@@ -433,8 +434,8 @@ impl Matrirc {
                     sender, .. } = ev;
                 match membership {
                     MembershipState::Leave => {
-                        let chan = self.matrix_room2irc_chan(room_id);
-                        let nick = self.matrix_userid2irc_nick_default(&sender);
+                        let chan = self.matrix_room2irc_chan(room_id).await;
+                        let nick = self.matrix_userid2irc_nick_default(&sender).await;
                         self.irc_send_cmd(Some(&format!("{}!{}@matrirc", nick, nick)), Command::PART(chan, None)).await?;
                     },
                     MembershipState::Join => {
@@ -442,7 +443,7 @@ impl Matrirc {
                             Some(name) => name,
                             None => sender.to_string(),
                         };
-                        let chan = self.matrix_room2irc_chan(room_id);
+                        let chan = self.matrix_room2irc_chan(room_id).await;
                         self.irc_member_join(&chan, &sender, &display_name).await?;
                     }
                     _ => {
@@ -457,7 +458,7 @@ impl Matrirc {
         Ok(())
     }
 
-    pub async fn handle_matrix_device_event_raw(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
+    async fn handle_matrix_device_event_raw(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         trace!("device event {:?}", event);
         match event {
@@ -500,15 +501,15 @@ impl Matrirc {
         Ok(())
     }
 
-    pub fn body_prepend_ts(&self, msg_body: String, ts: SystemTime) -> String {
-        if *self.initial_sync.read().unwrap() {
+    async fn body_prepend_ts(&self, msg_body: String, ts: SystemTime) -> String {
+        if *self.initial_sync.read().await {
             let datetime: DateTime<Local> = ts.into();
             return format!("{} {}", datetime.format("<%Y-%m-%d %H:%M:%S>"), msg_body);
         }
         msg_body
     }
 
-    pub async fn confirm_key_verification(self, sas: Sas) -> Result<()> {
+    async fn confirm_key_verification(self, sas: Sas) -> Result<()> {
         println!("Do the emoji match? {:?}", sas.emoji());
 
         if dialoguer::Confirm::new().with_prompt("Accept verification?").interact()? {
@@ -530,14 +531,14 @@ impl Matrirc {
         }
     }
 
-    pub fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
-        let map_locked = self.irc.chans.read().unwrap();
+    async fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
+        let map_locked = self.irc.chans.read().await;
         let chan = map_locked.get(chan)?;
         Some(chan.room_id.clone())
     }
 
-    pub fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
-        let map_locked = self.roomid2chan.read().unwrap();
+    async fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
+        let map_locked = self.roomid2chan.read().await;
         match map_locked.get(room_id) {
             Some(chan) => chan.clone(),
             None => "&matrirc".to_string(),
@@ -545,61 +546,61 @@ impl Matrirc {
     }
 
     /// insert new nick, preferring old one if found
-    pub fn insert_userid_nick_maps(&self, user_id: &UserId, nick: String) -> String {
-        let nick = self.irc.user_id2nick.write().unwrap()
+    async fn insert_userid_nick_maps(&self, user_id: &UserId, nick: String) -> String {
+        let nick = self.irc.user_id2nick.write().await
             .entry(user_id.clone())
             .or_insert(nick)
             .clone();
-        self.irc.nick2user_id.write().unwrap().
-            insert(nick.clone(), user_id.clone());
+        self.irc.nick2user_id.write().await
+            .insert(nick.clone(), user_id.clone());
         nick
     }
 
     /// insert anyway
     /// XXX racy because two locks, but we can only be updated
     /// from the matrix event handler thread... ideally merge locks later
-    pub fn update_userid_nick_maps(&self, user_id: &UserId, nick: String) {
-        if let Some(old_nick) = self.irc.user_id2nick.read().unwrap().get(user_id).clone() {
-            self.irc.nick2user_id.write().unwrap()
+    async fn update_userid_nick_maps(&self, user_id: &UserId, nick: String) {
+        if let Some(old_nick) = self.irc.user_id2nick.read().await.get(user_id).clone() {
+            self.irc.nick2user_id.write().await
                 .remove(old_nick);
         }
-        self.irc.user_id2nick.write().unwrap()
+        self.irc.user_id2nick.write().await
             .insert(user_id.clone(), nick.clone());
-        self.irc.nick2user_id.write().unwrap()
+        self.irc.nick2user_id.write().await
             .insert(nick.clone(), user_id.clone());
     }
 
-    pub fn matrix_userid2irc_nick(&self, user_id: &UserId) -> Option<String> {
-        Some(self.irc.user_id2nick.read().unwrap().get(user_id)?.clone())
+    async fn matrix_userid2irc_nick(&self, user_id: &UserId) -> Option<String> {
+        Some(self.irc.user_id2nick.read().await.get(user_id)?.clone())
     }
 
-    pub fn matrix_userid2irc_nick_default(&self, user_id: &UserId) -> String {
-        self.irc.user_id2nick.read().unwrap().get(user_id)
+    async fn matrix_userid2irc_nick_default(&self, user_id: &UserId) -> String {
+        self.irc.user_id2nick.read().await.get(user_id)
              .unwrap_or(&user_id.to_string()).clone()
     }
 
-    pub fn irc_nick2matrix_userid(&self, nick: &str) -> Option<UserId> {
-        Some(self.irc.nick2user_id.read().unwrap().get(nick)?.clone())
+    async fn irc_nick2matrix_userid(&self, nick: &str) -> Option<UserId> {
+        Some(self.irc.nick2user_id.read().await.get(nick)?.clone())
     }
 
-    pub async fn irc_member_join(&self, chan_name: &str, user_id: &UserId, nick: &str) -> Result<()> {
+    async fn irc_member_join(&self, chan_name: &str, user_id: &UserId, nick: &str) -> Result<()> {
         let nick = sanitize_name(nick);
-        match self.matrix_userid2irc_nick(user_id) {
+        match self.matrix_userid2irc_nick(user_id).await {
             None => {
-                self.update_userid_nick_maps(user_id, nick.clone());
+                self.update_userid_nick_maps(user_id, nick.clone()).await;
             }
             Some(old_nick) => {
                 debug!("Considering rename {} to {}", old_nick, nick);
                 if old_nick.as_str() != nick &&
-                    self.irc_nick2matrix_userid(&nick).is_none() {
-                    self.update_userid_nick_maps(user_id, nick.clone());
+                    self.irc_nick2matrix_userid(&nick).await.is_none() {
+                    self.update_userid_nick_maps(user_id, nick.clone()).await;
                     self.irc_send_cmd(Some(&format!("{}!{}@matrirc", old_nick, old_nick)), Command::NICK(nick.clone())).await?;
                 }
             }
         }
 
         let join = {
-            let mut map_locked = self.irc.chans.write().unwrap();
+            let mut map_locked = self.irc.chans.write().await;
             let chan = map_locked.entry(chan_name.into());
             let mut chan = match chan {
                 Entry::Vacant(_) => return Err(Error::msg("someone joining a chan we don't know?")),
@@ -757,10 +758,10 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
     tokio::spawn(async move { irc_write_thread(writer, toirc_rx).await });
 
-    while *matrix_running.read().unwrap() {
+    while *matrix_running.read().await {
         delay_for(Duration::from_secs(1)).await;
     }
-    *matrix_running.write().unwrap() = true;
+    *matrix_running.write().await = true;
     // setup matrix things
     let matrix_client = matrix_init(pickle_pass).await;
 
@@ -772,22 +773,22 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
 
     // XXX move that in new somehow but await..
     let self_user_id = &matrirc.matrix_client.user_id().await.unwrap();
-    matrirc.update_userid_nick_maps(self_user_id, matrirc.irc.nick.to_string());
+    matrirc.update_userid_nick_maps(self_user_id, matrirc.irc.nick.to_string()).await;
 
     for room in matrix_client.joined_rooms().read().await.values() {
         matrirc.irc_join_chan(room.read().await.clone()).await?;
     }
 
     matrirc.handle_matrix_events(matrix_response).await?;
-    *matrirc.initial_sync.write().unwrap() = false;
+    *matrirc.initial_sync.write().await = false;
 
     let matrirc_clone = matrirc.clone();
     tokio::spawn(async move {
         matrix_client.sync_with_callback(SyncSettings::new(), |resp| async {
             trace!("got {:#?}", resp);
             matrirc_clone.handle_matrix_events(resp).await.unwrap();
-            if *matrirc_clone.stop.read().unwrap() {
-                *matrix_running.write().unwrap() = true;
+            if *matrirc_clone.stop.read().await {
+                *matrix_running.write().await = true;
                 LoopCtrl::Break
             } else {
                 LoopCtrl::Continue
@@ -797,7 +798,7 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     matrirc.sync_forever(reader).await;
 
     info!("disconnect event");
-    *matrirc.stop.write().unwrap() = true;
+    *matrirc.stop.write().await = true;
     matrirc.irc_send_cmd(None, Command::QUIT(None)).await?;
     Ok(())
 }
