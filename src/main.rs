@@ -794,6 +794,7 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     tokio::spawn(async move { irc_write_thread(writer, toirc_rx).await });
 
     while *matrix_running.read().await {
+        info!("waiting for lock");
         delay_for(Duration::from_secs(1)).await;
     }
     *matrix_running.write().await = true;
@@ -823,7 +824,7 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
             trace!("got {:#?}", resp);
             matrirc_clone.handle_matrix_events(resp).await.unwrap();
             if *matrirc_clone.stop.read().await {
-                *matrix_running.write().await = true;
+                *matrix_running.write().await = false;
                 LoopCtrl::Break
             } else {
                 LoopCtrl::Continue
