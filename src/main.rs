@@ -39,7 +39,7 @@ use matrix_sdk::{
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
     },
     Client, ClientConfig, SyncSettings, Session, Room,
-    Sas,
+    Sas, LoopCtrl,
 };
 use matrix_sdk_common::{
     identifiers::{UserId, RoomId},
@@ -788,9 +788,9 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
             matrirc_clone.handle_matrix_events(resp).await.unwrap();
             if *matrirc_clone.stop.read().unwrap() {
                 *matrix_running.write().unwrap() = true;
-                true
+                LoopCtrl::Break
             } else {
-                false
+                LoopCtrl::Continue
             }
         }).await
     });
