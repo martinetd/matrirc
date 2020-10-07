@@ -176,34 +176,32 @@ impl Matrirc {
             // <- MODE #bar b
             // -> :matrirc 368 nick #chan :End
             Command::PRIVMSG(target, body) => {
-                let rtarget = event.response_target().unwrap_or(target);
-                match self.irc_targets2query(target, rtarget).await {
+                match self.irc_target2query(target).await {
                     Some(Query::Room(room_id)) => {
                         if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
                             if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
-                                self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                                self.irc_send_notice("matrirc", &self.irc.nick, &format!("Failed sending to matrix: {:?}", e)).await?;
                             }
                         } else {
                             if let Err(e) = self.matrix_room_send_text(&room_id, body.to_owned()).await {
-                                self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                                self.irc_send_notice("matrirc", &self.irc.nick, &format!("Failed sending to matrix: {:?}", e)).await?;
                             }
                         }
                     }
                     None => {
-                        self.irc_send_notice("matrirc", &rtarget, &format!("Could not find where to send to? {} / {}", target, rtarget)).await?;
+                        self.irc_send_notice("matrirc", &self.irc.nick, &format!("Could not find where to send to? {}", target)).await?;
                     }
                 }
             }
             Command::NOTICE(target, body) => {
-                let rtarget = event.response_target().unwrap_or(target);
-                match self.irc_targets2query(target, rtarget).await {
+                match self.irc_target2query(target).await {
                     Some(Query::Room(room_id)) => {
                         if let Err(e) = self.matrix_room_send_notice(&room_id, body.to_owned()).await {
-                            self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                            self.irc_send_notice("matrirc", &self.irc.nick, &format!("Failed sending to matrix: {:?}", e)).await?;
                         }
                     }
                     None => {
-                        self.irc_send_notice("matrirc", &rtarget, &format!("Could not find where to send to? {} / {}", target, rtarget)).await?;
+                        self.irc_send_notice("matrirc", &self.irc.nick, &format!("Could not find where to send to? {}", target)).await?;
                     }
                 }
             }
@@ -376,52 +374,56 @@ impl Matrirc {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
                 }
-                let chan = self.matrix_room2irc_chan(&room_id).await;
-                let sender = self.matrix_userid2irc_nick_default(&sender).await;
+                let (chan, sender, real_sender) = self.matrix2irc_targets(&room_id, &sender).await
+                    .unwrap_or((self.irc.nick.to_string(), "matrirc".to_string(), "<Error getting channel>".to_string()));
+                let msg_prefix = if sender == real_sender {
+                    "".to_string()
+                } else {
+                    format!("<from {}> ", real_sender)
+                };
                 match content {
                     MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
-                            self.irc_send_privmsg(&sender, &chan, &line).await?;
+                            self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
                     MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
-                            self.irc_send_notice(&sender, &chan, &line).await?;
+                            self.irc_send_notice(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
                     MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
-                        let msg_body = format!("\x01ACTION {}\x01", msg_body);
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
-                            self.irc_send_privmsg(&sender, &chan, &line).await?;
+                            self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}\x01", msg_prefix, line)).await?;
                         }
                     }
                     MessageEventContent::Audio(_) => {
-                        let msg_body = format!("{} sent audio", sender);
+                        let msg_body = format!("<{} sent audio>", real_sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageEventContent::File(_) => {
-                        let msg_body = format!("{} sent a file", sender);
+                        let msg_body = format!("<{} sent a file>", real_sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageEventContent::Image(_) => {
-                        let msg_body = format!("{} sent an image", sender);
+                        let msg_body = format!("<{} sent an image>", real_sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageEventContent::Location(_) => {
-                        let msg_body = format!("{} sent a location", sender);
+                        let msg_body = format!("<{} sent a location>", real_sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageEventContent::Video(_) => {
-                        let msg_body = format!("{} sent a video", sender);
+                        let msg_body = format!("<{} sent a video>", real_sender);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &msg_body).await?;
+                        self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     _ => {
                         debug!("other content? {:?}", content)
@@ -562,13 +564,23 @@ impl Matrirc {
         }
     }
 
-    async fn irc_targets2query(&self, target: &str, rtarget: &str) -> Option<Query> {
-        if target == rtarget {
+    async fn matrix2irc_targets(&self, room_id: &RoomId, sender: &UserId) -> Option<(String, String, String)> {
+        let chan = self.matrix_room2irc_chan(&room_id).await;
+        let sender = self.matrix_userid2irc_nick_default(&sender).await;
+        if chan.chars().next()? == '#' {
+            Some((chan, sender.clone(), sender))
+        } else {
+            Some((self.irc.nick.to_string(), chan, sender))
+        }
+    }
+
+    async fn irc_target2query(&self, target: &str) -> Option<Query> {
+        if target.chars().next()? == '#' {
             let map_locked = self.irc.chans.read().await;
             let chan = map_locked.get(target)?;
             Some(Query::Room(chan.room_id.clone()))
         } else {
-            Some(self.irc.queries.read().await.get(rtarget)?.clone())
+            Some(self.irc.queries.read().await.get(target)?.clone())
         }
     }
 
@@ -595,14 +607,25 @@ impl Matrirc {
     /// XXX racy because two locks, but we can only be updated
     /// from the matrix event handler thread... ideally merge locks later
     async fn update_userid_nick_maps(&self, user_id: &UserId, nick: String) {
+        let mut query = None;
         if let Some(old_nick) = self.irc.user_id2nick.read().await.get(user_id).clone() {
             self.irc.nick2user_id.write().await
                 .remove(old_nick);
+            query = self.irc.queries.write().await.remove(old_nick);
         }
         self.irc.user_id2nick.write().await
             .insert(user_id.clone(), nick.clone());
         self.irc.nick2user_id.write().await
             .insert(nick.clone(), user_id.clone());
+        if let Some(query) = query {
+            match &query {
+                Query::Room(room_id) => {
+                    self.roomid2chan.write().await.insert(room_id.clone(), nick.clone());
+                }
+            }
+            self.irc.queries.write().await.insert(nick.clone(), query);
+        }
+
     }
 
     async fn matrix_userid2irc_nick(&self, user_id: &UserId) -> Option<String> {
