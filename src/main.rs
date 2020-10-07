@@ -39,7 +39,7 @@ use matrix_sdk::{
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
     },
-    Client, ClientConfig, SyncSettings, Session, Room,
+    Client, ClientConfig, SyncSettings, Session, Room, RoomMember,
     Sas, LoopCtrl,
 };
 use matrix_sdk_common::{
@@ -85,6 +85,12 @@ struct Chan {
 }
 
 #[derive(Clone)]
+enum Query {
+    /// matrix room id
+    Room(RoomId),
+}
+
+#[derive(Clone)]
 struct Irc {
     /// irc nick
     nick: Arc<String>,
@@ -92,6 +98,8 @@ struct Irc {
     sink: Arc<Mutex<mpsc::Sender<Message>>>,
     /// index of channels and who is in
     chans: Arc<RwLock<HashMap<String, Chan>>>,
+    /// index of queries
+    queries: Arc<RwLock<HashMap<String, Query>>>,
     /// map of matrix user ids to nick
     user_id2nick: Arc<RwLock<HashMap<UserId, String>>>,
     /// map of irc nicks to matrix user ids
@@ -121,6 +129,7 @@ impl Matrirc {
                 nick: Arc::new(irc_nick),
                 sink: Arc::new(Mutex::new(sink)),
                 chans: Arc::new(RwLock::new(HashMap::<String, Chan>::new())),
+                queries: Arc::new(RwLock::new(HashMap::<String, Query>::new())),
                 user_id2nick: Arc::new(RwLock::new(HashMap::<UserId, String>::new())),
                 nick2user_id: Arc::new(RwLock::new(HashMap::<String, UserId>::new())),
             },
@@ -144,10 +153,10 @@ impl Matrirc {
     }
     async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
         let event = event.context("protocol error")?;
-        match event.command {
+        match &event.command {
             Command::PING(e, o) => {
                 debug!("PING {}", e);
-                self.irc_send_cmd(None, Command::PONG(e, o)).await?;
+                self.irc_send_cmd(None, Command::PONG(e.to_owned(), o.to_owned())).await?;
             }
             Command::QUIT(_) => {
                 return Ok(false);
@@ -166,24 +175,36 @@ impl Matrirc {
             // -> :matrirc 315 nick #chan :End
             // <- MODE #bar b
             // -> :matrirc 368 nick #chan :End
-            Command::PRIVMSG(chan, body) => {
-                // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
-                if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
-                    if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+            Command::PRIVMSG(target, body) => {
+                let rtarget = event.response_target().unwrap_or(target);
+                match self.irc_targets2query(target, rtarget).await {
+                    Some(Query::Room(room_id)) => {
+                        if let Some(action) = body.strip_prefix("\x01ACTION ").and_then(|s| { s.strip_suffix("\x01") }) {
+                            if let Err(e) = self.matrix_room_send_emote(&room_id, action.into()).await {
+                                self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                            }
+                        } else {
+                            if let Err(e) = self.matrix_room_send_text(&room_id, body.to_owned()).await {
+                                self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                            }
+                        }
                     }
-                } else {
-                    if let Err(e) = self.matrix_room_send_text(&room_id, body).await {
-                        self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+                    None => {
+                        self.irc_send_notice("matrirc", &rtarget, &format!("Could not find where to send to? {} / {}", target, rtarget)).await?;
                     }
                 }
             }
-            Command::NOTICE(chan, body) => {
-                // should use event.response_target(), but we do not deal with any query
-                let room_id = self.irc_chan2matrix_roomid(&chan).await.context("channel not found")?;
-                if let Err(e) = self.matrix_room_send_notice(&room_id, body).await {
-                    self.irc_send_notice("matrirc!matrirc@matrirc", &chan, &format!("Failed sending to matrix: {:?}", e)).await?;
+            Command::NOTICE(target, body) => {
+                let rtarget = event.response_target().unwrap_or(target);
+                match self.irc_targets2query(target, rtarget).await {
+                    Some(Query::Room(room_id)) => {
+                        if let Err(e) = self.matrix_room_send_notice(&room_id, body.to_owned()).await {
+                            self.irc_send_notice("matrirc", &rtarget, &format!("Failed sending to matrix: {:?}", e)).await?;
+                        }
+                    }
+                    None => {
+                        self.irc_send_notice("matrirc", &rtarget, &format!("Could not find where to send to? {} / {}", target, rtarget)).await?;
+                    }
                 }
             }
             _ => debug!("got msg {:?}", event),
@@ -197,6 +218,17 @@ impl Matrirc {
             // already done
             return Ok(());
         }
+        // direct chats handled as query, only setup maps
+        if let Some(user_id) = &room.direct_target {
+            let member = room.joined_members.get(user_id)
+                .context("room direct target but not in room?")?;
+            let nick = self.matrix_userid2irc_nick_or_set(user_id, member).await;
+            self.roomid2chan.write().await.insert(room.room_id.clone(), nick.clone());
+            self.irc.queries.write().await.insert(nick, Query::Room(room.room_id));
+            return Ok(());
+        }
+
+
         // find a suitable chan name
         let mut chan = format!("#{}", sanitize_name(room.display_name()));
         while let Some(_) = self.irc.chans.read().await.get(&chan) {
@@ -217,23 +249,7 @@ impl Matrirc {
             if member_id.as_ref() == self_user_id {
                 continue;
             }
-            let nick = match self.matrix_userid2irc_nick(&member_id).await {
-                Some(nick) => nick, // XXX potentially update nick here
-                None => {
-                    if member.display_name == None {
-                        debug!("member: {:?}", member);
-                    }
-                    let mut nick = match &member.display_name {
-                        Some(name) => name.clone(),
-                        None => member.name(),
-                    };
-                    nick = sanitize_name(nick);
-                    while self.irc_nick2matrix_userid(&nick).await.is_some() {
-                        nick.push('_');
-                    }
-                    self.insert_userid_nick_maps(member_id, nick).await
-                }
-            };
+            let nick = self.matrix_userid2irc_nick_or_set(&member_id, member).await;
             names_list.push_str(&nick);
             names_list.push(' ');
             if names_list.len() > 400 {
@@ -253,6 +269,27 @@ impl Matrirc {
         });
         Ok(())
     }
+
+    async fn matrix_userid2irc_nick_or_set(&self, user_id: &UserId, member: &RoomMember) -> String {
+        match self.matrix_userid2irc_nick(user_id).await {
+            Some(nick) => nick, // XXX potentially update nick here
+            None => {
+                if member.display_name == None {
+                    debug!("member: {:?}", member);
+                }
+                let mut nick = match &member.display_name {
+                    Some(name) => name.clone(),
+                    None => member.name(),
+                };
+                nick = sanitize_name(nick);
+                while self.irc_nick2matrix_userid(&nick).await.is_some() {
+                    nick.push('_');
+                }
+                self.insert_userid_nick_maps(user_id, nick).await
+            }
+        }
+    }
+
     /// helper to send custom Message
     pub async fn irc_send_cmd(&self, prefix: Option<&str>, command: Command) -> Result<()> {
         let mut sink = self.irc.sink.lock().await.clone();
@@ -525,10 +562,14 @@ impl Matrirc {
         }
     }
 
-    async fn irc_chan2matrix_roomid(&self, chan: &str) -> Option<RoomId> {
-        let map_locked = self.irc.chans.read().await;
-        let chan = map_locked.get(chan)?;
-        Some(chan.room_id.clone())
+    async fn irc_targets2query(&self, target: &str, rtarget: &str) -> Option<Query> {
+        if target == rtarget {
+            let map_locked = self.irc.chans.read().await;
+            let chan = map_locked.get(target)?;
+            Some(Query::Room(chan.room_id.clone()))
+        } else {
+            Some(self.irc.queries.read().await.get(rtarget)?.clone())
+        }
     }
 
     async fn matrix_room2irc_chan(&self, room_id: &RoomId) -> String {
