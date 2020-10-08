@@ -21,7 +21,6 @@ use tokio::sync::{RwLock, Mutex};
 use chrono::offset::Local;
 use chrono::DateTime;
 use std::time::SystemTime;
-use tokio::time::{delay_for, Duration};
 
 // ircd stuff
 use irc::client::prelude::*;
@@ -114,7 +113,7 @@ struct Matrirc {
     /// matrix sdk client
     matrix_client: Client,
     /// stop other threads when we notice
-    stop: Arc<RwLock<bool>>,
+    stop: Arc<Mutex<bool>>,
     /// matrix RoomId to IRC channels
     roomid2chan: Arc<RwLock<HashMap<RoomId, String>>>,
 }
@@ -135,7 +134,7 @@ impl Matrirc {
             },
             matrix_client,
             initial_sync: Arc::new(RwLock::new(true)),
-            stop: Arc::new(RwLock::new(false)),
+            stop: Arc::new(Mutex::new(false)),
             roomid2chan: Arc::new(RwLock::new(HashMap::<RoomId, String>::new())),
         }
     }
@@ -151,6 +150,16 @@ impl Matrirc {
             }
         }
     }
+
+    pub async fn reset(&self, toirc: mpsc::Sender<Message>) {
+        *self.irc.sink.lock().await = toirc;
+        self.irc.chans.write().await.clear();
+        self.irc.queries.write().await.clear();
+        self.irc.user_id2nick.write().await.clear();
+        self.irc.nick2user_id.write().await.clear();
+        self.roomid2chan.write().await.clear();
+    }
+
     async fn handle_irc_event(&self, event: Result<Message, ProtocolError>) -> Result<bool> {
         let event = event.context("protocol error")?;
         match &event.command {
@@ -729,14 +738,14 @@ async fn ircd_init() -> tokio::task::JoinHandle<()> {
     info!("listening on {}", bind_address);
     let mut listener = TcpListener::bind(bind_address).await.context("bind ircd port").unwrap();
     tokio::spawn(async move {
-        let matrix_running = Arc::new(RwLock::new(false));
+        let matrirc = Arc::new(Mutex::new(None));
         while let Ok((socket, addr)) = listener.accept().await {
           info!("accepted connection from {}", addr);
           let codec = IrcCodec::new("utf-8").unwrap();
           let stream = codec.framed(socket);
-          let matrix_lock = matrix_running.clone();
+          let matrirc_clone = matrirc.clone();
           tokio::spawn(async move {
-            handle_irc(matrix_lock, stream).await
+            handle_irc(matrirc_clone, stream).await
           });
         }
         info!("listener died");
@@ -808,7 +817,10 @@ fn irc_raw_msg(msg: String) -> Message {
     }
 }
 
-async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
+async fn handle_irc(
+    global_matrirc: Arc<Mutex<Option<Matrirc>>>,
+    stream: Framed<TcpStream, IrcCodec>,
+) -> Result<()> {
     // Check auth before doing anything else
     let (irc_nick, pickle_pass, stream) = irc_auth_loop(stream).await?;
     let (mut writer, reader) = stream.split();
@@ -816,19 +828,27 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
     tokio::spawn(async move { irc_write_thread(writer, toirc_rx).await });
 
-    while *matrix_running.read().await {
-        info!("waiting for lock");
-        delay_for(Duration::from_secs(1)).await;
-    }
-    *matrix_running.write().await = true;
-    // setup matrix things
-    let matrix_client = matrix_init(pickle_pass).await;
+    let (matrirc, initial_response) = {
+        let mut global_lock = global_matrirc.lock().await;
+        match &*global_lock {
+            Some(matrirc) => {
+                matrirc.reset(toirc).await;
+                (matrirc.to_owned(), None)
+            }
+            None => {
+                let matrix_client = matrix_init(pickle_pass).await;
 
-    // initial matrix sync required for room list
-    let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
-    trace!("initial sync: {:#?}", matrix_response);
+                // initial matrix sync required for room list
+                let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
+                trace!("initial sync: {:#?}", matrix_response);
 
-    let matrirc = Matrirc::new(irc_nick.clone(), toirc, matrix_client.clone());
+                let matrirc = Matrirc::new(irc_nick.clone(), toirc, matrix_client.clone());
+                *global_lock = Some(matrirc.clone());
+                (matrirc, Some(matrix_response))
+            }
+        }
+    };
+    let matrix_client = matrirc.matrix_client.clone();
 
     // XXX move that in new somehow but await..
     let self_user_id = &matrirc.matrix_client.user_id().await.unwrap();
@@ -838,26 +858,41 @@ async fn handle_irc(matrix_running: Arc<RwLock<bool>>, stream: Framed<TcpStream,
         matrirc.irc_join_chan(room.read().await.clone()).await?;
     }
 
-    matrirc.handle_matrix_events(matrix_response).await?;
-    *matrirc.initial_sync.write().await = false;
+    let spawn_matrix = {
+        let mut stop_lock = matrirc.stop.lock().await;
+        if *stop_lock {
+            *stop_lock = false;
+            false
+        } else {
+            true
+        }
+    };
 
-    let matrirc_clone = matrirc.clone();
-    tokio::spawn(async move {
-        matrix_client.sync_with_callback(SyncSettings::new(), |resp| async {
-            trace!("got {:#?}", resp);
-            matrirc_clone.handle_matrix_events(resp).await.unwrap();
-            if *matrirc_clone.stop.read().await {
-                *matrix_running.write().await = false;
-                LoopCtrl::Break
-            } else {
-                LoopCtrl::Continue
-            }
-        }).await
-    });
+    if spawn_matrix {
+        if let Some(matrix_response) = initial_response {
+            matrirc.handle_matrix_events(matrix_response).await?;
+        }
+        *matrirc.initial_sync.write().await = false;
+
+        let matrirc_clone = matrirc.clone();
+        tokio::spawn(async move {
+            matrix_client.sync_with_callback(SyncSettings::new(), |resp| async {
+                trace!("got {:#?}", resp);
+                matrirc_clone.handle_matrix_events(resp).await.unwrap();
+                let mut stop_lock = matrirc_clone.stop.lock().await;
+                if *stop_lock {
+                    *stop_lock = false;
+                    LoopCtrl::Break
+                } else {
+                    LoopCtrl::Continue
+                }
+            }).await
+        });
+    }
     matrirc.sync_forever(reader).await;
 
     info!("disconnect event");
-    *matrirc.stop.write().await = true;
+    *matrirc.stop.lock().await = true;
     matrirc.irc_send_cmd(None, Command::QUIT(None)).await?;
     Ok(())
 }
