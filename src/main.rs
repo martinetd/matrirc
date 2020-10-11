@@ -33,7 +33,7 @@ use tokio_util::codec::{Decoder, Framed};
 use matrix_sdk::{
     self,
     events::{
-        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent, EmoteMessageEventContent},
+        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent},
         room::member::{MemberEventContent, MembershipState},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
@@ -419,8 +419,12 @@ impl Matrirc {
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Image(_) => {
-                        let msg_body = format!("<{} sent an image>", real_sender);
+                    MessageEventContent::Image(ImageMessageEventContent{ body, url, .. }) => {
+                        let url = url.unwrap_or("no_url".to_string())
+                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()));
+
+                        let msg_body = format!("<{} sent an image: {} @ {}>",
+                                               real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
