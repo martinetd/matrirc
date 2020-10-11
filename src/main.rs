@@ -316,7 +316,7 @@ impl Matrirc {
     }
     /// helper for notice
     pub async fn irc_send_notice(&self, prefix: &str, target: &str, message: &str) -> Result<()> {
-        self.irc_send_cmd(Some(prefix), Command::NOTICE(target.into(), message.into())).await
+        self.irc_send_cmd(Some(&format!("{}!m", prefix)), Command::NOTICE(target.into(), message.into())).await
     }
 
     pub async fn matrix_room_send_text(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
