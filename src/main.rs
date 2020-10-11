@@ -33,7 +33,9 @@ use tokio_util::codec::{Decoder, Framed};
 use matrix_sdk::{
     self,
     events::{
-        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent},
+        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent,
+            EmoteMessageEventContent, ImageMessageEventContent, VideoMessageEventContent,
+            AudioMessageEventContent, FileMessageEventContent, LocationMessageEventContent},
         room::member::{MemberEventContent, MembershipState},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
@@ -409,32 +411,45 @@ impl Matrirc {
                             self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}\x01", msg_prefix, line)).await?;
                         }
                     }
-                    MessageEventContent::Audio(_) => {
-                        let msg_body = format!("<{} sent audio>", real_sender);
+                    MessageEventContent::Audio(AudioMessageEventContent{ body, url, .. }) => {
+                        let url = url.unwrap_or("no_url".to_string())
+                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
+                            .replace("//", "/");
+
+                        let msg_body = format!("<{} sent audio: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::File(_) => {
-                        let msg_body = format!("<{} sent a file>", real_sender);
+                    MessageEventContent::File(FileMessageEventContent{ body, url, .. }) => {
+                        let url = url.unwrap_or("no_url".to_string())
+                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
+                            .replace("//", "/");
+
+                        let msg_body = format!("<{} sent a file: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageEventContent::Image(ImageMessageEventContent{ body, url, .. }) => {
                         let url = url.unwrap_or("no_url".to_string())
-                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()));
+                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
+                            .replace("//", "/");
 
                         let msg_body = format!("<{} sent an image: {} @ {}>",
                                                real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Location(_) => {
-                        let msg_body = format!("<{} sent a location>", real_sender);
+                    MessageEventContent::Location(LocationMessageEventContent{ body, geo_uri, .. }) => {
+                        let msg_body = format!("<{} sent a location: {} @ {}>", real_sender, body, geo_uri);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Video(_) => {
-                        let msg_body = format!("<{} sent a video>", real_sender);
+                    MessageEventContent::Video(VideoMessageEventContent{ body, url, .. }) => {
+                        let url = url.unwrap_or("no_url".to_string())
+                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
+                            .replace("//", "/");
+
+                        let msg_body = format!("<{} sent a video: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
