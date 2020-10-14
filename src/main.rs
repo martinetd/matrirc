@@ -97,6 +97,8 @@ struct Irc {
     nick: Arc<String>,
     /// sink where to send irc messages to
     sink: Arc<Mutex<mpsc::Sender<Message>>>,
+    /// stop irc read thread when receive here
+    stop_receive: Arc<Mutex<mpsc::Sender<()>>>,
     /// index of channels and who is in
     chans: Arc<RwLock<HashMap<String, Chan>>>,
     /// index of queries
@@ -107,6 +109,13 @@ struct Irc {
     nick2user_id: Arc<RwLock<HashMap<String, UserId>>>,
 }
 
+struct MatrixThread {
+    /// stop matrix threads when we notice
+    stop: bool,
+    /// indicate if matrix sync thread is running
+    running: bool,
+}
+
 #[derive(Clone)]
 struct Matrirc {
     irc: Irc,
@@ -114,8 +123,8 @@ struct Matrirc {
     initial_sync: Arc<RwLock<bool>>,
     /// matrix sdk client
     matrix_client: Client,
-    /// stop other threads when we notice
-    stop: Arc<Mutex<bool>>,
+    /// matrix thread state
+    matrix_thread: Arc<Mutex<MatrixThread>>,
     /// matrix RoomId to IRC channels
     roomid2chan: Arc<RwLock<HashMap<RoomId, String>>>,
 }
@@ -123,12 +132,14 @@ struct Matrirc {
 impl Matrirc {
     pub fn new(irc_nick: String,
                sink: mpsc::Sender<Message>,
+               stop_irc: mpsc::Sender<()>,
                matrix_client: Client,
                ) -> Matrirc {
         Matrirc {
             irc: Irc {
                 nick: Arc::new(irc_nick),
                 sink: Arc::new(Mutex::new(sink)),
+                stop_receive: Arc::new(Mutex::new(stop_irc)),
                 chans: Arc::new(RwLock::new(HashMap::<String, Chan>::new())),
                 queries: Arc::new(RwLock::new(HashMap::<String, Query>::new())),
                 user_id2nick: Arc::new(RwLock::new(HashMap::<UserId, String>::new())),
@@ -136,21 +147,30 @@ impl Matrirc {
             },
             matrix_client,
             initial_sync: Arc::new(RwLock::new(true)),
-            stop: Arc::new(Mutex::new(false)),
+            matrix_thread: Arc::new(Mutex::new(MatrixThread { stop: false, running: false })),
             roomid2chan: Arc::new(RwLock::new(HashMap::<RoomId, String>::new())),
         }
     }
 
-    pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>) {
+    pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>, mut stopirc: mpsc::Receiver<()>) {
         while let Some(event) = stream.next().await {
+            if let Ok(_) = stopirc.try_recv() {
+                info!("Stopping irc receive thread from other thread request")
+            }
             match self.handle_irc_event(event).await {
                 Ok(true) => (),
-                Ok(false) => break,
+                Ok(false) => {
+                    info!("Stopping irc receive thread from callback");
+                    break;
+                }
                 Err(e) => {
                     debug!("Got an error handling irc event: {:?}", e);
                 }
             }
         }
+    }
+    pub async fn irc_stop_receive(&self) {
+        let _ = self.irc.stop_receive.lock().await.send(());
     }
 
     pub async fn reset(&self, toirc: mpsc::Sender<Message>) {
@@ -845,12 +865,16 @@ async fn handle_irc(
     let (mut writer, reader) = stream.split();
     writer.send(irc_raw_msg(format!(":{} 001 {} :Welcome to matrirc", "matrirc", irc_nick))).await?;
     let (toirc, toirc_rx) = mpsc::channel::<Message>(100);
+    let (stopirc, stopirc_rx) = mpsc::channel::<()>(1);
     tokio::spawn(async move { irc_write_thread(writer, toirc_rx).await });
 
     let (matrirc, initial_response) = {
         let mut global_lock = global_matrirc.lock().await;
         match &*global_lock {
             Some(matrirc) => {
+                // just in case... try to quit previous IRC thread
+                let _ = matrirc.irc_send_cmd(None, Command::QUIT(None)).await;
+                let _ = matrirc.irc_stop_receive().await;
                 matrirc.reset(toirc).await;
                 (matrirc.to_owned(), None)
             }
@@ -861,7 +885,7 @@ async fn handle_irc(
                 let matrix_response = matrix_client.sync_once(SyncSettings::new()).await?;
                 trace!("initial sync: {:#?}", matrix_response);
 
-                let matrirc = Matrirc::new(irc_nick.clone(), toirc, matrix_client.clone());
+                let matrirc = Matrirc::new(irc_nick.clone(), toirc, stopirc, matrix_client.clone());
                 *global_lock = Some(matrirc.clone());
                 (matrirc, Some(matrix_response))
             }
@@ -878,9 +902,9 @@ async fn handle_irc(
     }
 
     let spawn_matrix = {
-        let mut stop_lock = matrirc.stop.lock().await;
-        if *stop_lock {
-            *stop_lock = false;
+        let mut thread_lock = matrirc.matrix_thread.lock().await;
+        if thread_lock.running {
+            thread_lock.stop = false;
             false
         } else {
             true
@@ -893,14 +917,16 @@ async fn handle_irc(
         }
         *matrirc.initial_sync.write().await = false;
 
+        matrirc.matrix_thread.lock().await.running = true;
         let matrirc_clone = matrirc.clone();
         tokio::spawn(async move {
             matrix_client.sync_with_callback(SyncSettings::new(), |resp| async {
                 trace!("got {:#?}", resp);
                 matrirc_clone.handle_matrix_events(resp).await.unwrap();
-                let mut stop_lock = matrirc_clone.stop.lock().await;
-                if *stop_lock {
-                    *stop_lock = false;
+                let mut thread_lock = matrirc_clone.matrix_thread.lock().await;
+                if thread_lock.stop {
+                    thread_lock.stop = false;
+                    thread_lock.running = false;
                     LoopCtrl::Break
                 } else {
                     LoopCtrl::Continue
@@ -908,10 +934,10 @@ async fn handle_irc(
             }).await
         });
     }
-    matrirc.sync_forever(reader).await;
+    matrirc.sync_forever(reader, stopirc_rx).await;
 
     info!("disconnect event");
-    *matrirc.stop.lock().await = true;
+    matrirc.matrix_thread.lock().await.stop = true;
     matrirc.irc_send_cmd(None, Command::QUIT(None)).await?;
     Ok(())
 }
@@ -921,6 +947,7 @@ async fn irc_write_thread(mut writer: futures::stream::SplitSink<Framed<TcpStrea
         match message.command {
             Command::QUIT(_) => {
                 writer.close().await?;
+                info!("Stopping write thread to quit");
                 return Ok(());
             }
             _ => {
@@ -928,5 +955,6 @@ async fn irc_write_thread(mut writer: futures::stream::SplitSink<Framed<TcpStrea
             }
         }
     }
+    info!("Stopping write thread to some error");
     Ok(())
 }
