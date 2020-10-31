@@ -27,7 +27,7 @@ use irc::client::prelude::*;
 use irc::proto::IrcCodec;
 use irc::proto::error::ProtocolError;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_util::codec::{Decoder, Framed};
+use tokio_util::codec::Framed;
 
 // matrix stuff
 use matrix_sdk::{
@@ -781,7 +781,7 @@ async fn ircd_init() -> tokio::task::JoinHandle<()> {
         while let Ok((socket, addr)) = listener.accept().await {
           info!("accepted connection from {}", addr);
           let codec = IrcCodec::new("utf-8").unwrap();
-          let stream = codec.framed(socket);
+          let stream = Framed::new(socket, codec);
           let matrirc_clone = matrirc.clone();
           tokio::spawn(async move {
             handle_irc(matrirc_clone, stream).await
