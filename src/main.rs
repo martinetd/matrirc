@@ -11,9 +11,7 @@ extern crate dialoguer;
 extern crate chrono;
 
 use anyhow::{Result, Context, Error};
-use futures::prelude::*;
 use tokio::sync::mpsc;
-use futures::stream::SplitStream;
 use std::collections::hash_map::{HashMap, Entry};
 use std::sync::Arc;
 use tokio::sync::{RwLock, Mutex};
@@ -26,8 +24,12 @@ use std::time::SystemTime;
 use irc::client::prelude::*;
 use irc::proto::IrcCodec;
 use irc::proto::error::ProtocolError;
+use futures::{StreamExt, SinkExt};
+use futures::stream::SplitStream;
+use futures::future::FutureExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
+use tokio::task::unconstrained;
 
 // matrix stuff
 use matrix_sdk::{
@@ -154,7 +156,9 @@ impl Matrirc {
 
     pub async fn sync_forever(&self, mut stream: SplitStream<Framed<TcpStream, IrcCodec>>, mut stopirc: mpsc::Receiver<()>) {
         while let Some(event) = stream.next().await {
-            if let Ok(_) = stopirc.try_recv() {
+            // https://github.com/tokio-rs/tokio/issues/3350
+            // tl;dr tokio mpsc try_recv was removed, hack until it's back..
+            if let Some(_) = unconstrained(stopirc.recv()).now_or_never() {
                 info!("Stopping irc receive thread from other thread request")
             }
             match self.handle_irc_event(event).await {
@@ -321,7 +325,7 @@ impl Matrirc {
 
     /// helper to send custom Message
     pub async fn irc_send_cmd(&self, prefix: Option<&str>, command: Command) -> Result<()> {
-        let mut sink = self.irc.sink.lock().await.clone();
+        let sink = self.irc.sink.lock().await.clone();
         sink.send(Message {
             tags: None,
             prefix: prefix.and_then(|p| { Some(Prefix::new_from_str(p)) }),
@@ -775,7 +779,7 @@ async fn matrix_init(pickle_pass: Option<String>) -> matrix_sdk::Client {
 async fn ircd_init() -> tokio::task::JoinHandle<()> {
     let bind_address = dotenv::var("IRCD_BIND_ADDRESS").unwrap_or("[::1]:6667".to_string());
     info!("listening on {}", bind_address);
-    let mut listener = TcpListener::bind(bind_address).await.context("bind ircd port").unwrap();
+    let listener = TcpListener::bind(bind_address).await.context("bind ircd port").unwrap();
     tokio::spawn(async move {
         let matrirc = Arc::new(Mutex::new(None));
         while let Ok((socket, addr)) = listener.accept().await {
