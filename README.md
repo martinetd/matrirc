@@ -28,7 +28,10 @@ and password)
 - see XXX in the code
 - make a synthetic channel or user for e.g. device verifications,
 invite notices etc
-- add a list of ignored channels user doesn't care about
+- add a list of ignored channels user doesn't care about...
+Or automatic if no activity for > x months?
+- ideally handle direct chats in query, what if duplicate?
+- cleanup/do not join channels when it gets renamed...
 - lookup message by eventId if not in LRU for react/redact:
 https://github.com/matrix-org/matrix-rust-sdk/issues/242
 - somehow type irc nick/mask/chan and add conversion operators from matrix
