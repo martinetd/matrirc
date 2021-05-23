@@ -9,6 +9,7 @@ extern crate tokio;
 extern crate tokio_util;
 extern crate dialoguer;
 extern crate chrono;
+extern crate emoji;
 
 use anyhow::{Result, Context, Error};
 use tokio::sync::mpsc;
@@ -491,6 +492,11 @@ impl Matrirc {
                 };
                 let ReactionEventContent { relation, .. } = content;
                 let Relation { emoji, .. } = relation;
+                let emoji = if let Some(emoji) = emoji::lookup_by_glyph::lookup(&emoji) {
+                    format!("{} ({})", emoji.glyph, emoji.name)
+                } else {
+                    emoji
+                };
                 let msg_body = format!("Reacted with {}", emoji);
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
