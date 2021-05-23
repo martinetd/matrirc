@@ -44,6 +44,7 @@ use matrix_sdk::{
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
         reaction::{ReactionEventContent, Relation},
+        room::redaction::{RedactionEventContent, SyncRedactionEvent},
     },
     Client, ClientConfig, SyncSettings, Session, RoomMember,
     room, Sas, LoopCtrl,
@@ -491,6 +492,24 @@ impl Matrirc {
                 let ReactionEventContent { relation, .. } = content;
                 let Relation { emoji, .. } = relation;
                 let msg_body = format!("Reacted with {}", emoji);
+                let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
+            }
+            AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomRedaction(ev)) => {
+                let SyncRedactionEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
+                if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
+                    // this apparently means it's our echo message, skip it
+                    return Ok(());
+                }
+                let (chan, sender, real_sender) = self.matrix2irc_targets(&room_id, &sender).await
+                    .unwrap_or((self.irc.nick.to_string(), "matrirc".to_string(), "<Error getting channel>".to_string()));
+                let msg_prefix = if sender == real_sender {
+                    "".to_string()
+                } else {
+                    format!("<from {}> ", real_sender)
+                };
+                let RedactionEventContent { reason, .. } = content;
+                let msg_body = format!("Redacted a message ({})", reason.unwrap_or("no reason".to_string()));
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
