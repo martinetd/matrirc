@@ -10,6 +10,7 @@ extern crate tokio_util;
 extern crate dialoguer;
 extern crate chrono;
 extern crate emoji;
+extern crate lru;
 
 use anyhow::{Result, Context, Error};
 use tokio::sync::mpsc;
@@ -20,6 +21,7 @@ use tokio::sync::{RwLock, Mutex};
 use chrono::offset::Local;
 use chrono::DateTime;
 use std::time::SystemTime;
+use lru::LruCache;
 
 // ircd stuff
 use irc::client::prelude::*;
@@ -52,7 +54,7 @@ use matrix_sdk::{
 };
 use matrix_sdk_common::{
     MilliSecondsSinceUnixEpoch,
-    identifiers::{UserId, RoomId, MxcUri},
+    identifiers::{UserId, RoomId, MxcUri, EventId},
     deserialized_responses::SyncResponse,
     api::r0::message::send_message_event,
 };
@@ -133,6 +135,8 @@ struct Matrirc {
     matrix_client: Client,
     /// matrix thread state
     matrix_thread: Arc<Mutex<MatrixThread>>,
+    /// lru cache for recent events
+    matrix_message_lru: Arc<Mutex<LruCache<EventId, String>>>,
     /// matrix RoomId to IRC channels
     roomid2chan: Arc<RwLock<HashMap<RoomId, String>>>,
 }
@@ -156,6 +160,7 @@ impl Matrirc {
             matrix_client,
             initial_sync: Arc::new(RwLock::new(true)),
             matrix_thread: Arc::new(Mutex::new(MatrixThread { stop: false, running: false })),
+            matrix_message_lru: Arc::new(Mutex::new(LruCache::new(1000))),
             roomid2chan: Arc::new(RwLock::new(HashMap::<RoomId, String>::new())),
         }
     }
@@ -401,12 +406,20 @@ impl Matrirc {
         Ok(())
     }
 
+    async fn get_matrix_message_by_id(&self, event_id: &EventId) -> Option<String> {
+        if let Some(ev) = self.matrix_message_lru.lock().await.get(event_id) {
+            return Some(ev.clone())
+        }
+        // XXX query server
+        None
+    }
+
     async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::deserialized_responses::SyncRoomEvent) -> Result<(), Error> {
         let event = raw_event.event.deserialize()?;
         trace!("room timeline event {:?}", event);
         match event {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
-                let SyncMessageEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
+                let SyncMessageEvent { content, sender, event_id, origin_server_ts: ts, unsigned, .. } = ev;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
@@ -422,20 +435,35 @@ impl Matrirc {
                 match msgtype {
                     MessageType::Text(TextMessageEventContent { body: msg_body, .. }) =>  {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
-                        for line in msg_body.split('\n') {
+                        let mut lines = msg_body.lines();
+                        if let Some(first) = lines.next() {
+                            self.matrix_message_lru.lock().await.put(event_id, first.to_string());
+                            self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, first)).await?;
+                        }
+                        for line in lines {
                             self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
                     MessageType::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
-                        for line in msg_body.split('\n') {
+                        let mut lines = msg_body.lines();
+                        if let Some(first) = lines.next() {
+                            self.matrix_message_lru.lock().await.put(event_id, first.to_string());
+                            self.irc_send_notice(&sender, &chan, &format!("{}{}", msg_prefix, first)).await?;
+                        }
+                        for line in lines {
                             self.irc_send_notice(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
                     MessageType::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
-                        for line in msg_body.split('\n') {
-                            self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}\x01", msg_prefix, line)).await?;
+                        let mut lines = msg_body.lines();
+                        if let Some(first) = lines.next() {
+                            self.matrix_message_lru.lock().await.put(event_id, first.to_string());
+                            self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}", msg_prefix, first)).await?;
+                        }
+                        for line in lines {
+                            self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}", msg_prefix, line)).await?;
                         }
                     }
                     MessageType::Audio(AudioMessageEventContent{ body, url, .. }) => {
@@ -443,6 +471,7 @@ impl Matrirc {
 
                         let msg_body = format!("<{} sent audio: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                        self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageType::File(FileMessageEventContent{ body, url, .. }) => {
@@ -450,6 +479,7 @@ impl Matrirc {
 
                         let msg_body = format!("<{} sent a file: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                        self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageType::Image(ImageMessageEventContent{ body, url, .. }) => {
@@ -458,11 +488,13 @@ impl Matrirc {
                         let msg_body = format!("<{} sent an image: {} @ {}>",
                                                real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                        self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageType::Location(LocationMessageEventContent{ body, geo_uri, .. }) => {
                         let msg_body = format!("<{} sent a location: {} @ {}>", real_sender, body, geo_uri);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                        self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     MessageType::Video(VideoMessageEventContent{ body, url, .. }) => {
@@ -470,6 +502,7 @@ impl Matrirc {
 
                         let msg_body = format!("<{} sent a video: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                        self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     _ => {
@@ -491,18 +524,19 @@ impl Matrirc {
                     format!("<from {}> ", real_sender)
                 };
                 let ReactionEventContent { relation, .. } = content;
-                let Relation { emoji, .. } = relation;
-                let emoji = if let Some(emoji) = emoji::lookup_by_glyph::lookup(&emoji) {
-                    format!("{} ({})", emoji.glyph, emoji.name)
-                } else {
-                    emoji
+                let Relation { emoji: mut emoji_text, event_id, .. } = relation;
+                if let Some(emoji) = emoji::lookup_by_glyph::lookup(&emoji_text) {
+                    emoji_text = format!("{} ({})", emoji.glyph, emoji.name)
                 };
-                let msg_body = format!("Reacted with {}", emoji);
+                if let Some(orig_message) = self.get_matrix_message_by_id(&event_id).await {
+                    emoji_text = format!("{}: {}", emoji_text, orig_message)
+                };
+                let msg_body = format!("Reacted with {}", emoji_text);
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomRedaction(ev)) => {
-                let SyncRedactionEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
+                let SyncRedactionEvent { content, sender, redacts, origin_server_ts: ts, unsigned, .. } = ev;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
@@ -515,7 +549,10 @@ impl Matrirc {
                     format!("<from {}> ", real_sender)
                 };
                 let RedactionEventContent { reason, .. } = content;
-                let msg_body = format!("Redacted a message ({})", reason.unwrap_or("no reason".to_string()));
+                let mut msg_body = format!("Redacted a message ({})", reason.unwrap_or("no reason".to_string()));
+                if let Some(orig_message) = self.get_matrix_message_by_id(&redacts).await {
+                    msg_body = format!("{}: {}", msg_body, orig_message)
+                };
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
