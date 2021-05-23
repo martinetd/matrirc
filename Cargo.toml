@@ -18,7 +18,7 @@ env_logger = "0.8"
 anyhow = "1.0"
 futures = "0.3"
 log = "0.4"
-irc = "0.15"
+irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "f76c845979d6c4fb3839b5d219f8486bae78fdb6" }
 tokio = { version = "1.0.0", features = ["full"] }
 tokio-util = { version = "0.6", features = ["codec"] }
 matrix-sdk = { version = "0.2.0", git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "fe17dce813f500b4c633669a7078ee843bb44886" }
