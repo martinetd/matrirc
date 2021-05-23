@@ -35,19 +35,21 @@ use tokio::task::unconstrained;
 use matrix_sdk::{
     self,
     events::{
-        room::message::{MessageEventContent, TextMessageEventContent, NoticeMessageEventContent,
-            EmoteMessageEventContent, ImageMessageEventContent, VideoMessageEventContent,
-            AudioMessageEventContent, FileMessageEventContent, LocationMessageEventContent},
+        room::message::{MessageEventContent, MessageType, TextMessageEventContent,
+            NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent,
+            VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent,
+            LocationMessageEventContent},
         room::member::{MemberEventContent, MembershipState},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
     },
-    Client, ClientConfig, SyncSettings, Session, Room, RoomMember,
-    Sas, LoopCtrl,
+    Client, ClientConfig, SyncSettings, Session, RoomMember,
+    room, Sas, LoopCtrl,
 };
 use matrix_sdk_common::{
-    identifiers::{UserId, RoomId},
-    api::r0::sync::sync_events,
+    MilliSecondsSinceUnixEpoch,
+    identifiers::{UserId, RoomId, MxcUri},
+    deserialized_responses::SyncResponse,
     api::r0::message::send_message_event,
 };
 use std::convert::TryFrom;
@@ -246,24 +248,25 @@ impl Matrirc {
     }
 
     /// build list of chan members and join
-    pub async fn irc_join_chan(&self, room: Room) -> Result<()> {
-        if self.roomid2chan.read().await.get(&room.room_id) != None {
+    pub async fn irc_join_chan(&self, room: room::Joined) -> Result<()> {
+        let room_id = room.room_id();
+        if self.roomid2chan.read().await.get(&room_id) != None {
             // already done
             return Ok(());
         }
         // direct chats handled as query, only setup maps
-        if let Some(user_id) = &room.direct_target {
-            let member = room.joined_members.get(user_id)
-                .context("room direct target but not in room?")?;
-            let nick = self.matrix_userid2irc_nick_or_set(user_id, member).await;
-            self.roomid2chan.write().await.insert(room.room_id.clone(), nick.clone());
-            self.irc.queries.write().await.insert(nick, Query::Room(room.room_id));
+        if let Some(user_id) = &room.direct_target() {
+            let member = room.get_member(user_id).await?
+                .context("room direct target but not in room?")?; // XXX can happen
+            let nick = self.matrix_userid2irc_nick_or_set(user_id, &member).await;
+            self.roomid2chan.write().await.insert(room_id.clone(), nick.clone());
+            self.irc.queries.write().await.insert(nick, Query::Room(room_id.clone()));
             return Ok(());
         }
 
 
         // find a suitable chan name
-        let mut chan = format!("#{}", sanitize_name(room.display_name()));
+        let mut chan = format!("#{}", sanitize_name(room.display_name().await?));
         while let Some(_) = self.irc.chans.read().await.get(&chan) {
             chan.push('_');
         }
@@ -278,26 +281,26 @@ impl Matrirc {
         names_list.push(' ');
         let self_user_id = self.matrix_client.user_id().await.unwrap();
         chan_members.insert(self_user_id.clone(), ());
-        for (member_id, member) in room.joined_members.iter() {
-            if member_id.as_ref() == self_user_id {
+        for member in room.joined_members().await?.iter() {
+            if member.user_id().as_ref() == self_user_id {
                 continue;
             }
-            let nick = self.matrix_userid2irc_nick_or_set(&member_id, member).await;
+            let nick = self.matrix_userid2irc_nick_or_set(member.user_id(), member).await;
             names_list.push_str(&nick);
             names_list.push(' ');
             if names_list.len() > 400 {
                 self.irc_send_raw(&names_list).await?;
                 names_list = names_list_header.clone();
             }
-            chan_members.insert(member_id.to_owned(), ());
+            chan_members.insert(member.user_id().clone(), ());
         }
         if names_list != names_list_header {
                 self.irc_send_raw(&names_list).await?;
         }
         self.irc_send_raw(&format!(":matrirc 366 {} {} :End", self.irc.nick, chan)).await?;
-        self.roomid2chan.write().await.insert(room.room_id.clone(), chan.clone());
+        self.roomid2chan.write().await.insert(room_id.clone(), chan.clone());
         self.irc.chans.write().await.insert(chan, Chan {
-            room_id: room.room_id,
+            room_id: room_id.clone(),
             members: chan_members,
         });
         Ok(())
@@ -307,12 +310,12 @@ impl Matrirc {
         match self.matrix_userid2irc_nick(user_id).await {
             Some(nick) => nick, // XXX potentially update nick here
             None => {
-                if member.display_name == None {
-                    debug!("member: {:?}", member);
-                }
-                let mut nick = match &member.display_name {
-                    Some(name) => name.clone(),
-                    None => member.name(),
+                let mut nick: String = match &member.display_name() {
+                    Some(name) => name.to_string(),
+                    None => {
+                        debug!("member has no name: {:?}", member);
+                        member.name().to_string()
+                    },
                 };
                 nick = sanitize_name(nick);
                 while self.irc_nick2matrix_userid(&nick).await.is_some() {
@@ -322,6 +325,16 @@ impl Matrirc {
             }
         }
     }
+    /// helper to get http url instead of mxc
+    pub fn mxcuri_option_to_string(&self, uri: Option<MxcUri>) -> String {
+        let url = match uri {
+            Some(uri) => uri.as_str().to_string(),
+            None => "no_url".to_string(),
+        };
+        url.replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
+            .replace("//", "/")
+    }
+
 
     /// helper to send custom Message
     pub async fn irc_send_cmd(&self, prefix: Option<&str>, command: Command) -> Result<()> {
@@ -346,61 +359,46 @@ impl Matrirc {
     }
 
     pub async fn matrix_room_send_text(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Text(
-                TextMessageEventContent {
-                    body,
-                    formatted: None,
-                    relates_to: None,
-                },
-        ));
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(body));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
 
     pub async fn matrix_room_send_notice(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Notice(
-                NoticeMessageEventContent {
-                    body,
-                    formatted: None,
-                    relates_to: None,
-                },
-        ));
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::notice_plain(body));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
 
     pub async fn matrix_room_send_emote(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::Emote(
-                EmoteMessageEventContent {
-                    body,
-                    formatted: None,
-                },
-        ));
+        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::new(
+            MessageType::Emote(EmoteMessageEventContent::plain(body))));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
 
-    pub async fn handle_matrix_events(&self, response: sync_events::Response) -> Result<()> {
+    pub async fn handle_matrix_events(&self, response: SyncResponse) -> Result<()> {
         for (room_id, room) in response.rooms.join {
             for event in &room.state.events {
                 if let Err(e) = self.handle_matrix_room_state_event_raw(&room_id, event).await {
                     warn!("room state event error: {:?}", e);
                 }
             }
-            for event in &room.timeline.events {
-                if let Err(e) = self.handle_matrix_room_timeline_event_raw(&room_id, event).await {
-                    warn!("room timeline event error: {:?}", e);
+            for event in room.timeline.events {
+                if let Err(e) = self.handle_matrix_room_timeline_event_raw(&room_id, &event).await {
+                    warn!("Event {:?} errored: {:?}", event, e);
                 }
             }
         }
-        for event in &response.to_device.events {
-            if let Err(e) = self.handle_matrix_device_event_raw(event).await {
-                warn!("device event error: {:?}", e);
+
+        for event in response.to_device.events {
+            if let Err(e) = self.handle_matrix_device_event_raw(&event).await {
+                warn!("Event {:?} errored: {:?}", event, e);
             }
         }
 
         Ok(())
     }
 
-    async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncRoomEvent>) -> Result<(), Error> {
-        let event = raw_event.deserialize()?;
+    async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::deserialized_responses::SyncRoomEvent) -> Result<(), Error> {
+        let event = raw_event.event.deserialize()?;
         trace!("room timeline event {:?}", event);
         match event {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
@@ -416,69 +414,62 @@ impl Matrirc {
                 } else {
                     format!("<from {}> ", real_sender)
                 };
-                match content {
-                    MessageEventContent::Text(TextMessageEventContent { body: msg_body, .. }) => {
+                let MessageEventContent { msgtype, relates_to, new_content, .. } = content;
+                match msgtype {
+                    MessageType::Text(TextMessageEventContent { body: msg_body, .. }) =>  {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
-                    MessageEventContent::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
+                    MessageType::Notice(NoticeMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_notice(&sender, &chan, &format!("{}{}", msg_prefix, line)).await?;
                         }
                     }
-                    MessageEventContent::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
+                    MessageType::Emote(EmoteMessageEventContent { body: msg_body, .. }) => {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
                         for line in msg_body.split('\n') {
                             self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}\x01", msg_prefix, line)).await?;
                         }
                     }
-                    MessageEventContent::Audio(AudioMessageEventContent{ body, url, .. }) => {
-                        let url = url.unwrap_or("no_url".to_string())
-                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
-                            .replace("//", "/");
+                    MessageType::Audio(AudioMessageEventContent{ body, url, .. }) => {
+                        let url = self.mxcuri_option_to_string(url);
 
                         let msg_body = format!("<{} sent audio: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::File(FileMessageEventContent{ body, url, .. }) => {
-                        let url = url.unwrap_or("no_url".to_string())
-                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
-                            .replace("//", "/");
+                    MessageType::File(FileMessageEventContent{ body, url, .. }) => {
+                        let url = self.mxcuri_option_to_string(url);
 
                         let msg_body = format!("<{} sent a file: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Image(ImageMessageEventContent{ body, url, .. }) => {
-                        let url = url.unwrap_or("no_url".to_string())
-                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
-                            .replace("//", "/");
+                    MessageType::Image(ImageMessageEventContent{ body, url, .. }) => {
+                        let url = self.mxcuri_option_to_string(url);
 
                         let msg_body = format!("<{} sent an image: {} @ {}>",
                                                real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Location(LocationMessageEventContent{ body, geo_uri, .. }) => {
+                    MessageType::Location(LocationMessageEventContent{ body, geo_uri, .. }) => {
                         let msg_body = format!("<{} sent a location: {} @ {}>", real_sender, body, geo_uri);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageEventContent::Video(VideoMessageEventContent{ body, url, .. }) => {
-                        let url = url.unwrap_or("no_url".to_string())
-                            .replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
-                            .replace("//", "/");
+                    MessageType::Video(VideoMessageEventContent{ body, url, .. }) => {
+                        let url = self.mxcuri_option_to_string(url);
 
                         let msg_body = format!("<{} sent a video: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     _ => {
-                        debug!("other content? {:?}", content)
+                        debug!("other content? {:?}", msgtype)
                     }
                 }
             }
@@ -509,8 +500,10 @@ impl Matrirc {
     async fn handle_matrix_room_state_event(&self, room_id: &RoomId, event: AnySyncStateEvent) -> Result<(), Error> {
         match event {
             AnySyncStateEvent::RoomCreate(_) => {
-                if let Some(room) = self.matrix_client.joined_rooms().read().await.get(room_id) {
-                    self.irc_join_chan(room.read().await.clone()).await?
+                for room in &self.matrix_client.joined_rooms() {
+                    if room.room_id() == room_id {
+                        return self.irc_join_chan(room.clone()).await;
+                    }
                 }
             }
             AnySyncStateEvent::RoomMember(ev) => {
@@ -586,9 +579,9 @@ impl Matrirc {
         Ok(())
     }
 
-    async fn body_prepend_ts(&self, msg_body: String, ts: SystemTime) -> String {
+    async fn body_prepend_ts(&self, msg_body: String, ts: MilliSecondsSinceUnixEpoch) -> String {
         if *self.initial_sync.read().await {
-            let datetime: DateTime<Local> = ts.into();
+            let datetime: DateTime<Local> = ts.to_system_time().unwrap_or(SystemTime::UNIX_EPOCH).into();
             return format!("{} {}", datetime.format("<%Y-%m-%d %H:%M:%S>"), msg_body);
         }
         msg_body
@@ -901,8 +894,8 @@ async fn handle_irc(
     let self_user_id = &matrirc.matrix_client.user_id().await.unwrap();
     matrirc.update_userid_nick_maps(self_user_id, matrirc.irc.nick.to_string()).await;
 
-    for room in matrix_client.joined_rooms().read().await.values() {
-        matrirc.irc_join_chan(room.read().await.clone()).await?;
+    for room in matrix_client.joined_rooms() {
+        matrirc.irc_join_chan(room.clone()).await?;
     }
 
     let spawn_matrix = {
