@@ -38,10 +38,12 @@ use matrix_sdk::{
         room::message::{MessageEventContent, MessageType, TextMessageEventContent,
             NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent,
             VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent,
-            LocationMessageEventContent},
+            LocationMessageEventContent,
+        },
         room::member::{MemberEventContent, MembershipState},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
         AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
+        reaction::{ReactionEventContent, Relation},
     },
     Client, ClientConfig, SyncSettings, Session, RoomMember,
     room, Sas, LoopCtrl,
@@ -414,7 +416,7 @@ impl Matrirc {
                 } else {
                     format!("<from {}> ", real_sender)
                 };
-                let MessageEventContent { msgtype, relates_to, new_content, .. } = content;
+                let MessageEventContent { msgtype, .. } = content;
                 match msgtype {
                     MessageType::Text(TextMessageEventContent { body: msg_body, .. }) =>  {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;
@@ -469,9 +471,28 @@ impl Matrirc {
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
                     _ => {
-                        debug!("other content? {:?}", msgtype)
+                        debug!("roommessage other content? {:?}", msgtype)
                     }
                 }
+            }
+            AnySyncRoomEvent::Message(AnySyncMessageEvent::Reaction(ev)) => {
+                let SyncMessageEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
+                if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
+                    // this apparently means it's our echo message, skip it
+                    return Ok(());
+                }
+                let (chan, sender, real_sender) = self.matrix2irc_targets(&room_id, &sender).await
+                    .unwrap_or((self.irc.nick.to_string(), "matrirc".to_string(), "<Error getting channel>".to_string()));
+                let msg_prefix = if sender == real_sender {
+                    "".to_string()
+                } else {
+                    format!("<from {}> ", real_sender)
+                };
+                let ReactionEventContent { relation, .. } = content;
+                let Relation { emoji, .. } = relation;
+                let msg_body = format!("Reacted with {}", emoji);
+                let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
+                self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomEncrypted(ev)) => {
                 let SyncMessageEvent { sender, origin_server_ts: ts, .. } = ev;
