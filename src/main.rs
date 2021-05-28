@@ -425,8 +425,16 @@ impl Matrirc {
         match event {
             AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
                 let SyncMessageEvent { content, sender, event_id, origin_server_ts: ts, unsigned, .. } = ev;
+                let MessageEventContent { msgtype, .. } = content;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
+                    let msg = match msgtype {
+                    MessageType::Text(TextMessageEventContent { body, .. }) => body,
+                    MessageType::Notice(NoticeMessageEventContent { body, .. }) => body,
+                    MessageType::Emote(EmoteMessageEventContent { body, .. }) => body,
+                    _ => "err, what did you just write?".to_string(),
+                    };
+                    self.matrix_message_lru.lock().await.put(event_id, msg);
                     return Ok(());
                 }
                 let (chan, sender, real_sender) = self.matrix2irc_targets(&room_id, &sender).await
@@ -436,7 +444,6 @@ impl Matrirc {
                 } else {
                     format!("<from {}> ", real_sender)
                 };
-                let MessageEventContent { msgtype, .. } = content;
                 match msgtype {
                     MessageType::Text(TextMessageEventContent { body: msg_body, .. }) =>  {
                         let msg_body = self.body_prepend_ts(msg_body, ts).await;

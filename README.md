@@ -35,3 +35,4 @@ Or automatic if no activity for > x months?
 - lookup message by eventId if not in LRU for react/redact:
 https://github.com/matrix-org/matrix-rust-sdk/issues/242
 - somehow type irc nick/mask/chan and add conversion operators from matrix
+- removing a reaction also shows as a redaction, print that better
