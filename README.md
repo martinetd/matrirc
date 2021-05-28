@@ -35,7 +35,3 @@ Or automatic if no activity for > x months?
 - lookup message by eventId if not in LRU for react/redact:
 https://github.com/matrix-org/matrix-rust-sdk/issues/242
 - somehow type irc nick/mask/chan and add conversion operators from matrix
-- look into irssi errors:
-19:20:35 -!- Irssi: critical nicklist_set_host: assertion 'host != NULL' failed
-Probably some mask malformed?
-

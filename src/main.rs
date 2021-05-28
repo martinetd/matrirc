@@ -16,6 +16,7 @@ use anyhow::{Result, Context, Error};
 use tokio::sync::mpsc;
 use std::collections::hash_map::{HashMap, Entry};
 use std::sync::Arc;
+use std::cmp::min;
 use tokio::sync::{RwLock, Mutex};
 
 use chrono::offset::Local;
@@ -350,7 +351,11 @@ impl Matrirc {
         let sink = self.irc.sink.lock().await.clone();
         sink.send(Message {
             tags: None,
-            prefix: prefix.and_then(|p| { Some(Prefix::new_from_str(p)) }),
+            prefix: prefix.and_then(|p| { Some(
+                Prefix::Nickname(p.to_string(),
+                                 p[..min(p.len(),6)].to_string(),
+                                 "matrirc".to_string())
+            )}),
             command,
         }).await.context("could not send to pipe to irc messages")
     }
