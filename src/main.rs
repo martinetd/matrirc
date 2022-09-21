@@ -604,23 +604,24 @@ impl Matrirc {
             AnySyncStateEvent::RoomMember(ev) => {
                 let SyncStateEvent{
                     content: MemberEventContent{ displayname, membership, .. },
-                    sender, .. } = ev;
+                    state_key, .. } = ev;
+                let user = UserId::try_from(state_key)?;
                 match membership {
                     MembershipState::Leave => {
                         let chan = self.matrix_room2irc_chan(room_id).await;
-                        let nick = self.matrix_userid2irc_nick_default(&sender).await;
+                        let nick = self.matrix_userid2irc_nick_default(&user).await;
                         self.irc_send_cmd(Some(&nick), Command::PART(chan, None)).await?;
                     },
                     MembershipState::Join => {
                         let display_name = match displayname {
                             Some(name) => name,
-                            None => sender.to_string(),
+                            None => user.to_string(),
                         };
                         let chan = self.matrix_room2irc_chan(room_id).await;
-                        self.irc_member_join(&chan, &sender, &display_name).await?;
+                        self.irc_member_join(&chan, &user, &display_name).await?;
                     }
                     _ => {
-                        debug!("unknown membership {} for {} in {}", membership, sender, room_id);
+                        debug!("unknown membership {} for {} in {}", membership, user, room_id);
                     }
                 }
             }
