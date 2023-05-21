@@ -42,7 +42,7 @@ use matrix_sdk::{
         room::message::{MessageEventContent, MessageType, TextMessageEventContent,
             NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent,
             VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent,
-            LocationMessageEventContent,
+            LocationMessageEventContent, CustomEventContent
         },
         room::member::{MemberEventContent, MembershipState},
         AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
@@ -516,6 +516,11 @@ impl Matrirc {
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
+                    }
+                    MessageType::_Custom(CustomEventContent{ msgtype, data, .. }) => {
+                        // parse json...?
+                        let msg_body = data.body;
+                        self.irc_send_privmsg(&sender, &chan, &format!("<{}> {}", msgtype, msg_body)).await?;
                     }
                     _ => {
                         debug!("roommessage other content? {:?}", msgtype)
