@@ -1,5 +1,3 @@
-#![type_length_limit="2048000"]
-
 extern crate env_logger;
 extern crate anyhow;
 #[macro_use]
@@ -38,26 +36,29 @@ use tokio::task::unconstrained;
 // matrix stuff
 use matrix_sdk::{
     self,
-    events::{
-        room::message::{MessageEventContent, MessageType, TextMessageEventContent,
-            NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent,
-            VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent,
-            LocationMessageEventContent, CustomEventContent
+    ruma::{
+        api::client::message::send_message_event,
+        MilliSecondsSinceUnixEpoch,
+        UserId, RoomId, EventId,
+        events::{
+            room::MediaSource,
+            room::message::{RoomMessageEventContent, MessageType, TextMessageEventContent,
+                NoticeMessageEventContent, EmoteMessageEventContent, ImageMessageEventContent,
+                VideoMessageEventContent, AudioMessageEventContent, FileMessageEventContent,
+                LocationMessageEventContent, CustomEventContent, SyncRoomMessageEvent,
+            },
+            room::member::{RoomMemberEventContent, MembershipState, SyncRoomMemberEvent},
+            AnyMessageLikeEventContent, AnySyncMessageLikeEvent, AnySyncTimelineEvent, OriginalSyncMessageLikeEvent,
+            AnyToDeviceEvent, AnySyncStateEvent,
+            reaction::{ReactionEventContent, Relation},
+            room::redaction::{RoomRedactionEventContent, OriginalSyncRoomRedactionEvent},
+            
         },
-        room::member::{MemberEventContent, MembershipState},
-        AnyMessageEventContent, AnySyncMessageEvent, AnySyncRoomEvent, SyncMessageEvent,
-        AnyToDeviceEvent, AnySyncStateEvent, SyncStateEvent,
-        reaction::{ReactionEventContent, Relation},
-        room::redaction::{RedactionEventContent, SyncRedactionEvent},
+        serde
     },
-    Client, ClientConfig, SyncSettings, Session, RoomMember,
-    room, Sas, LoopCtrl,
-};
-use matrix_sdk_common::{
-    MilliSecondsSinceUnixEpoch,
-    identifiers::{UserId, RoomId, MxcUri, EventId},
+    Client, LoopCtrl, config::SyncSettings, Session,
+    room, encryption::verification::{SasVerification, Verification},
     deserialized_responses::SyncResponse,
-    api::r0::message::send_message_event,
 };
 use std::convert::TryFrom;
 use std::convert::From;
@@ -316,7 +317,7 @@ impl Matrirc {
         Ok(())
     }
 
-    async fn matrix_userid2irc_nick_or_set(&self, user_id: &UserId, member: &RoomMember) -> String {
+    async fn matrix_userid2irc_nick_or_set(&self, user_id: &UserId, member: &room::RoomMember) -> String {
         match self.matrix_userid2irc_nick(user_id).await {
             Some(nick) => nick, // XXX potentially update nick here
             None => {
@@ -336,10 +337,10 @@ impl Matrirc {
         }
     }
     /// helper to get http url instead of mxc
-    pub fn mxcuri_option_to_string(&self, uri: Option<MxcUri>) -> String {
+    pub fn mxcuri_option_to_string(&self, uri: MediaSource) -> String {
         let url = match uri {
-            Some(uri) => uri.as_str().to_string(),
-            None => "no_url".to_string(),
+            MediaSource::Plain(uri) => uri.as_str().to_string(),
+            _ => "no_url".to_string(),
         };
         url.replace("mxc://", &format!("{}/_matrix/media/r0/download/", self.matrix_client.homeserver()))
             .replace("//", "/")
@@ -372,18 +373,18 @@ impl Matrirc {
         self.irc_send_cmd(Some(&format!("{}!m", prefix)), Command::NOTICE(target.into(), message.into())).await
     }
 
-    pub async fn matrix_room_send_text(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::text_plain(body));
+    pub async fn matrix_room_send_text(&self, room_id: &RoomId, body: String) -> Result<send_message_event::v3::Response> {
+        let response = AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::text_plain(body));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
 
-    pub async fn matrix_room_send_notice(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::notice_plain(body));
+    pub async fn matrix_room_send_notice(&self, room_id: &RoomId, body: String) -> Result<send_message_event::v3::Response> {
+        let response = AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::notice_plain(body));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
 
-    pub async fn matrix_room_send_emote(&self, room_id: &RoomId, body: String) -> Result<send_message_event::Response> {
-        let response = AnyMessageEventContent::RoomMessage(MessageEventContent::new(
+    pub async fn matrix_room_send_emote(&self, room_id: &RoomId, body: String) -> Result<send_message_event::v3::Response> {
+        let response = AnyMessageLikeEventContent::RoomMessage(RoomMessageEventContent::new(
             MessageType::Emote(EmoteMessageEventContent::plain(body))));
         Ok(self.matrix_client.room_send(&room_id, response, None).await?)
     }
@@ -419,13 +420,14 @@ impl Matrirc {
         None
     }
 
-    async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::deserialized_responses::SyncRoomEvent) -> Result<(), Error> {
+    async fn handle_matrix_room_timeline_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::deserialized_responses::SyncTimelineEvent) -> Result<(), Error> {
         let event = raw_event.event.deserialize()?;
         trace!("room timeline event {:?}", event);
         match event {
-            AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomMessage(ev)) => {
-                let SyncMessageEvent { content, sender, event_id, origin_server_ts: ts, unsigned, .. } = ev;
-                let MessageEventContent { msgtype, .. } = content;
+            AnySyncTimelineEvent::Message(AnySyncMessageLikeEvent::RoomMessage(ev)) => {
+
+                let OriginalSyncMessageLikeEvent { content, sender, event_id, origin_server_ts: ts, unsigned, .. } = ev;
+                let RoomMessageEventContent { msgtype, .. } = content;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     let msg = match msgtype {
@@ -478,24 +480,24 @@ impl Matrirc {
                             self.irc_send_privmsg(&sender, &chan, &format!("\x01ACTION {}{}", msg_prefix, line)).await?;
                         }
                     }
-                    MessageType::Audio(AudioMessageEventContent{ body, url, .. }) => {
-                        let url = self.mxcuri_option_to_string(url);
+                    MessageType::Audio(AudioMessageEventContent{ body, source, .. }) => {
+                        let url = self.mxcuri_option_to_string(source);
 
                         let msg_body = format!("<{} sent audio: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageType::File(FileMessageEventContent{ body, url, .. }) => {
-                        let url = self.mxcuri_option_to_string(url);
+                    MessageType::File(FileMessageEventContent{ body, source, .. }) => {
+                        let url = self.mxcuri_option_to_string(source);
 
                         let msg_body = format!("<{} sent a file: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                         self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageType::Image(ImageMessageEventContent{ body, url, .. }) => {
-                        let url = self.mxcuri_option_to_string(url);
+                    MessageType::Image(ImageMessageEventContent{ body, source, .. }) => {
+                        let url = self.mxcuri_option_to_string(source);
 
                         let msg_body = format!("<{} sent an image: {} @ {}>",
                                                real_sender, body, url);
@@ -509,8 +511,8 @@ impl Matrirc {
                         self.matrix_message_lru.lock().await.put(event_id, msg_body.to_string());
                         self.irc_send_notice(&sender, &chan, &msg_body).await?;
                     }
-                    MessageType::Video(VideoMessageEventContent{ body, url, .. }) => {
-                        let url = self.mxcuri_option_to_string(url);
+                    MessageType::Video(VideoMessageEventContent{ body, source, .. }) => {
+                        let url = self.mxcuri_option_to_string(source);
 
                         let msg_body = format!("<{} sent a video: {} @ {}>", real_sender, body, url);
                         let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
@@ -527,8 +529,8 @@ impl Matrirc {
                     }
                 }
             }
-            AnySyncRoomEvent::Message(AnySyncMessageEvent::Reaction(ev)) => {
-                let SyncMessageEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
+            AnySyncTimelineEvent::Message(AnySyncMessageLikeEvent::Reaction(SyncRoomMessageEvent::Original(ev))) => {
+                let OriginalSyncMessageLikeEvent { content, sender, origin_server_ts: ts, unsigned, .. } = ev;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
@@ -552,8 +554,8 @@ impl Matrirc {
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
-            AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomRedaction(ev)) => {
-                let SyncRedactionEvent { content, sender, redacts, origin_server_ts: ts, unsigned, .. } = ev;
+            AnySyncTimelineEvent::Message(AnySyncMessageLikeEvent::RoomRedaction(ev)) => {
+                let OriginalSyncRoomRedactionEvent { content, sender, redacts, origin_server_ts: ts, unsigned, .. } = ev;
                 if unsigned.transaction_id != None && ! *self.initial_sync.read().await {
                     // this apparently means it's our echo message, skip it
                     return Ok(());
@@ -565,7 +567,7 @@ impl Matrirc {
                 } else {
                     format!("<from {}> ", real_sender)
                 };
-                let RedactionEventContent { reason, .. } = content;
+                let RoomRedactionEventContent { reason, .. } = content;
                 let mut msg_body = format!("Redacted a message ({})", reason.unwrap_or("no reason".to_string()));
                 if let Some(orig_message) = self.get_matrix_message_by_id(&redacts).await {
                     msg_body = format!("{}: {}", msg_body, orig_message)
@@ -573,15 +575,15 @@ impl Matrirc {
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &format!("{}{}", msg_prefix, msg_body)).await?;
             }
-            AnySyncRoomEvent::Message(AnySyncMessageEvent::RoomEncrypted(ev)) => {
-                let SyncMessageEvent { sender, origin_server_ts: ts, .. } = ev;
+            AnySyncTimelineEvent::Message(AnySyncMessageLikeEvent::RoomEncrypted(SyncRoomMessageEvent::Original(ev))) => {
+                let OriginalSyncMessageLikeEvent { sender, origin_server_ts: ts, .. } = ev;
                 let chan = self.matrix_room2irc_chan(&room_id).await;
                 let sender = self.matrix_userid2irc_nick_default(&sender).await;
                 let msg_body = "Could not decrypt message";
                 let msg_body = self.body_prepend_ts(msg_body.into(), ts).await;
                 self.irc_send_privmsg(&sender, &chan, &msg_body).await?;
             }
-            AnySyncRoomEvent::State(ev) => {
+            AnySyncTimelineEvent::State(ev) => {
                 self.handle_matrix_room_state_event(room_id, ev).await?;
             }
             _  => {
@@ -591,7 +593,7 @@ impl Matrirc {
         Ok(())
     }
 
-    async fn handle_matrix_room_state_event_raw(&self, room_id: &RoomId, raw_event: &matrix_sdk::Raw<AnySyncStateEvent>) -> Result<(), Error> {
+    async fn handle_matrix_room_state_event_raw(&self, room_id: &RoomId, raw_event: &serde::Raw<AnySyncStateEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         trace!("room state event {:?}", event);
         self.handle_matrix_room_state_event(room_id, event).await
@@ -607,8 +609,8 @@ impl Matrirc {
                 }
             }
             AnySyncStateEvent::RoomMember(ev) => {
-                let SyncStateEvent{
-                    content: MemberEventContent{ displayname, membership, .. },
+                let SyncRoomMemberEvent{
+                    content: RoomMemberEventContent{ displayname, membership, .. },
                     state_key, .. } = ev;
                 let user = UserId::try_from(state_key)?;
                 match membership {
@@ -637,7 +639,7 @@ impl Matrirc {
         Ok(())
     }
 
-    async fn handle_matrix_device_event_raw(&self, raw_event: &matrix_sdk::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
+    async fn handle_matrix_device_event_raw(&self, raw_event: &serde::Raw<AnyToDeviceEvent>) -> Result<(), Error> {
         let event = raw_event.deserialize()?;
         trace!("device event {:?}", event);
         match event {
@@ -688,7 +690,7 @@ impl Matrirc {
         msg_body
     }
 
-    async fn confirm_key_verification(self, sas: Sas) -> Result<()> {
+    async fn confirm_key_verification(self, sas: SasVerification) -> Result<()> {
         println!("Do the emoji match? {:?}", sas.emoji());
 
         if dialoguer::Confirm::new().with_prompt("Accept verification?").interact()? {
@@ -836,7 +838,7 @@ async fn matrix_init(pickle_pass: Option<String>) -> matrix_sdk::Client {
          _ => dirs::data_dir().and_then(|a| Some(a.join("matrirc/matrix_store"))).unwrap()
     };
 
-    let client_config = ClientConfig::new().store_path(store_path);
+    let client_config = Client::builder().store_path(store_path);
     let client_config = match pickle_pass {
         Some(pass) => client_config.passphrase(pass),
         None => client_config,
