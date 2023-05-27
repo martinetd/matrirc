@@ -1,11 +1,12 @@
-extern crate env_logger;
-
 mod args;
 mod ircd;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     args::parse();
 
-    ircd::listen();
+    let ircd = ircd::listen().await;
+
+    ircd.await.unwrap();
 }

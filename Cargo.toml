@@ -13,3 +13,7 @@ readme = "README.md"
 env_logger = "0.10"
 log = "0.4"
 clap = { version = "4.3.0", features = ["derive"] }
+irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "f76c845979d6c4fb3839b5d219f8486bae78fdb6" }
+anyhow = "1.0"
+tokio = { version = "1.0.0", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
