@@ -1,0 +1,15 @@
+[package]
+name = "matrirc"
+edition = "2021"
+version = "0.1.0"
+description = "An ircd to matrix gateway"
+authors = ["Dominique Martinet <asmadeus@codewreck.org>"]
+license = "WTFPLv2"
+keywords = ["irc", "matrix"]
+repository = "https://github.com/martinetd/matrirc"
+readme = "README.md"
+
+[dependencies]
+env_logger = "0.10"
+log = "0.4"
+clap = { version = "4.3.0", features = ["derive"] }
