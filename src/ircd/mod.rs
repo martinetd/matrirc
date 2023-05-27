@@ -1,5 +1,5 @@
 use anyhow::{Context, Error, Result};
-use irc::{client::prelude::Command, proto::IrcCodec};
+use irc::client::prelude::Command;
 use log::{debug, info};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
@@ -7,9 +7,11 @@ use tokio_util::codec::Framed;
 // for Framed.send()
 //use futures::{SinkExt, StreamExt};
 // for Framed.next()
-use tokio_stream::StreamExt;
+use futures::TryStreamExt;
 
 use crate::args::args;
+
+mod codec;
 
 pub async fn listen() -> tokio::task::JoinHandle<()> {
     info!("listening to {}", args().ircd_listen);
@@ -28,7 +30,7 @@ pub async fn listen() -> tokio::task::JoinHandle<()> {
 }
 
 async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
-    let codec = IrcCodec::new("utf-8")?;
+    let codec = codec::Codec::new("utf-8")?;
     let stream = Framed::new(socket, codec);
     tokio::spawn(async move {
         if let Err(e) = handle_client(stream).await {
@@ -38,14 +40,14 @@ async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
     Ok(())
 }
 
-async fn handle_client(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
+async fn handle_client(stream: Framed<TcpStream, codec::Codec>) -> Result<()> {
     debug!("Awaiting auth");
     let irc_nick = irc_auth_loop(stream).await?;
     info!("Login from {}", irc_nick);
     Ok(())
 }
 
-async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<String> {
+async fn irc_auth_loop(mut stream: Framed<TcpStream, codec::Codec>) -> Result<String> {
     let mut client_nick = None;
     while let Some(event) = stream.try_next().await? {
         match event.command {
