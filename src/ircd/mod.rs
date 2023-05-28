@@ -36,20 +36,29 @@ async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
     let stream = Framed::new(socket, codec);
     tokio::spawn(async move {
         if let Err(e) = handle_client(stream).await {
-            info!("Terminating {}: {}", addr, e)
+            info!("Terminating {}: {}", addr, e);
         }
     });
     Ok(())
 }
 
-async fn handle_client(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
+async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     debug!("Awaiting auth");
-    let (nick, user, _pass) = auth_loop(stream).await?;
+    let (nick, user, _pass) = match auth_loop(&mut stream).await {
+        Ok(data) => data,
+        Err(e) => {
+            // keep original error, but try to tell client we're not ok
+            let _ = stream
+                .send(proto::raw_msg(format!("Closing session: {}", e)))
+                .await;
+            return Err(e);
+        }
+    };
     info!("Authenticated {}!{}", nick, user);
     Ok(())
 }
 
-async fn auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, String, String)> {
+async fn auth_loop(stream: &mut Framed<TcpStream, IrcCodec>) -> Result<(String, String, String)> {
     let mut client_nick = None;
     let mut client_user = None;
     let mut client_pass = None;
@@ -75,12 +84,12 @@ async fn auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, S
     }
     if let (Some(nick), Some(user), Some(pass)) = (client_nick, client_user, client_pass) {
         info!("Processing login from {}!{}", nick, user);
-        match state::login(&nick, &pass) {
-            Ok(Some(_session)) => {
+        match state::login(&nick, &pass)? {
+            Some(_session) => {
                 // restore matrix session
                 Ok((nick, user, pass))
             }
-            Ok(None) => {
+            None => {
                 // matrix login
                 state::create_user(
                     &nick,
@@ -90,10 +99,6 @@ async fn auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, S
                     },
                 )?;
                 Ok((nick, user, pass))
-            }
-            Err(e) => {
-                stream.send(proto::raw_msg(e.to_string())).await?;
-                Err(e)
             }
         }
     } else {
