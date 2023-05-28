@@ -1,9 +1,7 @@
 use anyhow::{Context, Error, Result};
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, SaltString},
-    Argon2, PasswordHasher, PasswordVerifier,
-};
-use serde;
+use log::info;
+use pwbox::{sodium::Sodium, ErasedPwBox, Eraser, Suite};
+use rand_core::OsRng;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -11,37 +9,43 @@ use std::path::{Path, PathBuf};
 
 use crate::args::args;
 
+// data we want to keep around
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Hash {
-    algo: String, // only support "argon2"
-    hash: String, // contains salt and argon2 params
+struct Session {
+    homeserver: String,
+    //matrix_session: matrix_sdk::Session;
 }
 
-fn check_pass(creds_file: PathBuf, pass: &str) -> Result<()> {
-    let disk_hash = {
-        let content = fs::read_to_string(creds_file).context("Could not read user creds file")?;
-        toml::from_str::<Hash>(&content).context("Could not deserialize creds file content")?
+fn check_pass(session_file: PathBuf, pass: &str) -> Result<()> {
+    let blob = {
+        let content = fs::read(session_file).context("Could not read user session file")?;
+        serde_json::from_slice::<ErasedPwBox>(&content)
+            .context("Could not deserialize session file content")?
     };
-    if disk_hash.algo != "argon2" {
-        return Err(Error::msg("Had bad hash on disk"));
-    }
-    let parsed_hash =
-        PasswordHash::new(&disk_hash.hash).context("Could not parse on-disk password")?;
-    Argon2::default()
-        .verify_password(pass.as_bytes(), &parsed_hash)
-        .context("User password mismatch")?;
+    let mut eraser = Eraser::new();
+    eraser.add_suite::<Sodium>();
+    let unboxed = eraser
+        .restore(&blob)
+        .context("Could not parse data on disk")?
+        .open(pass.as_bytes())
+        .context("Could not decrypt stored session")?;
+    let session = serde_json::from_slice::<Session>(&*unboxed)
+        .context("Could not deserialize stored session")?;
+    info!("Decrypted {}", session.homeserver);
     Ok(())
 }
 
 fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
-    let salt = SaltString::generate(&mut OsRng);
-    let password_hash = Argon2::default()
-        .hash_password(pass.as_bytes(), &salt)
-        .context("hashing password failed")?;
-    let hash = Hash {
-        algo: "argon2".to_string(),
-        hash: password_hash.serialize().to_string(),
+    let session = Session {
+        homeserver: "hardcoded test".to_string(),
     };
+    let pwbox = Sodium::build_box(&mut OsRng).seal(
+        pass,
+        serde_json::to_vec(&session).context("could not serialize session")?,
+    )?;
+    let mut eraser = Eraser::new();
+    eraser.add_suite::<Sodium>();
+    let blob = eraser.erase(&pwbox)?;
     if !user_dir.is_dir() {
         fs::DirBuilder::new()
             .mode(0o700)
@@ -53,21 +57,17 @@ fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
         .mode(0o400)
         .write(true)
         .create_new(true)
-        .open(user_dir.join("creds.toml"))
-        .context("creating user creds file failed")?;
-    file.write_all(
-        toml::to_string(&hash)
-            .context("could not serialize hash")?
-            .as_bytes(),
-    )
-    .context("Writing to user creds file failed")?;
+        .open(user_dir.join("session"))
+        .context("creating user session file failed")?;
+    file.write_all(&serde_json::to_vec(&blob).context("could not serialize blob")?)
+        .context("Writing to user session file failed")?;
     Ok(())
 }
 
 pub fn login(nick: &str, pass: &str) -> Result<()> {
-    let creds_file = Path::new(&args().state_dir).join(nick).join("creds.toml");
-    if creds_file.is_file() {
-        check_pass(creds_file, pass)
+    let session_file = Path::new(&args().state_dir).join(nick).join("session");
+    if session_file.is_file() {
+        check_pass(session_file, pass)
     } else if args().allow_register {
         create_user(Path::new(&args().state_dir).join(nick), pass)
     } else {
