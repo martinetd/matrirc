@@ -11,12 +11,13 @@ use crate::args::args;
 
 // data we want to keep around
 #[derive(serde::Serialize, serde::Deserialize)]
-struct Session {
-    homeserver: String,
-    //matrix_session: matrix_sdk::Session;
+pub struct Session {
+    pub homeserver: String,
+    //pub matrix_session: matrix_sdk::Session;
 }
 
-fn check_pass(session_file: PathBuf, pass: &str) -> Result<()> {
+/// try to decrypt session and return it
+fn check_pass(session_file: PathBuf, pass: &str) -> Result<Session> {
     let blob = {
         let content = fs::read(session_file).context("Could not read user session file")?;
         serde_json::from_slice::<ErasedPwBox>(&content)
@@ -32,13 +33,11 @@ fn check_pass(session_file: PathBuf, pass: &str) -> Result<()> {
     let session = serde_json::from_slice::<Session>(&*unboxed)
         .context("Could not deserialize stored session")?;
     info!("Decrypted {}", session.homeserver);
-    Ok(())
+    Ok(session)
 }
 
-fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
-    let session = Session {
-        homeserver: "hardcoded test".to_string(),
-    };
+/// encrypt session and store it
+pub fn create_user(nick: &str, pass: &str, session: Session) -> Result<()> {
     let pwbox = Sodium::build_box(&mut OsRng).seal(
         pass,
         serde_json::to_vec(&session).context("could not serialize session")?,
@@ -46,6 +45,8 @@ fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
     let mut eraser = Eraser::new();
     eraser.add_suite::<Sodium>();
     let blob = eraser.erase(&pwbox)?;
+
+    let user_dir = Path::new(&args().state_dir).join(nick);
     if !user_dir.is_dir() {
         fs::DirBuilder::new()
             .mode(0o700)
@@ -64,12 +65,14 @@ fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn login(nick: &str, pass: &str) -> Result<()> {
+/// Initial "log in": if user exists validate its password,
+/// otherwise just let it through iff we allow new users
+pub fn login(nick: &str, pass: &str) -> Result<Option<Session>> {
     let session_file = Path::new(&args().state_dir).join(nick).join("session");
     if session_file.is_file() {
-        check_pass(session_file, pass)
+        Ok(Some(check_pass(session_file, pass)?))
     } else if args().allow_register {
-        create_user(Path::new(&args().state_dir).join(nick), pass)
+        Ok(None)
     } else {
         Err(Error::msg(format!("unknown user {}", nick)))
     }

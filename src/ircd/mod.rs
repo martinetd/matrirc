@@ -76,7 +76,21 @@ async fn auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, S
     if let (Some(nick), Some(user), Some(pass)) = (client_nick, client_user, client_pass) {
         info!("Processing login from {}!{}", nick, user);
         match state::login(&nick, &pass) {
-            Ok(()) => Ok((nick, user, pass)),
+            Ok(Some(_session)) => {
+                // restore matrix session
+                Ok((nick, user, pass))
+            }
+            Ok(None) => {
+                // matrix login
+                state::create_user(
+                    &nick,
+                    &pass,
+                    state::Session {
+                        homeserver: "test".to_string(),
+                    },
+                )?;
+                Ok((nick, user, pass))
+            }
             Err(e) => {
                 stream.send(proto::raw_msg(e.to_string())).await?;
                 Err(e)
