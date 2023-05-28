@@ -6,7 +6,7 @@ use argon2::{
 use serde;
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::args::args;
@@ -45,11 +45,16 @@ fn create_user(user_dir: PathBuf, pass: &str) -> Result<()> {
     if !user_dir.is_dir() {
         fs::DirBuilder::new()
             .mode(0o700)
+            .recursive(true)
             .create(&user_dir)
             .context("mkdir of user dir failed")?
     }
-    let mut file =
-        fs::File::create(user_dir.join("creds.toml")).context("creating user creds file failed")?;
+    let mut file = fs::OpenOptions::new()
+        .mode(0o400)
+        .write(true)
+        .create_new(true)
+        .open(user_dir.join("creds.toml"))
+        .context("creating user creds file failed")?;
     file.write_all(
         toml::to_string(&hash)
             .context("could not serialize hash")?
