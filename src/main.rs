@@ -1,5 +1,6 @@
 mod args;
 mod ircd;
+mod state;
 
 #[tokio::main]
 async fn main() {

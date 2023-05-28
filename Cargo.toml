@@ -17,4 +17,8 @@ irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "3d037df76
 anyhow = "1.0"
 tokio = { version = "1.0.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
-tokio-stream = "0.1"
+futures = "0.3"
+zeroize = "1.6"
+argon2 = { version = "0.5", features = ["password-hash", "std"] }
+toml = "0.7"
+serde = "1.0"

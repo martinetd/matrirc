@@ -1,15 +1,19 @@
 use anyhow::{Context, Error, Result};
 use irc::{client::prelude::Command, proto::IrcCodec};
-use log::{debug, info};
+use log::{debug, info, trace};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-// for Framed.send()
-//use futures::{SinkExt, StreamExt};
-// for Framed.next()
-use tokio_stream::StreamExt;
+// for Framed.send() / Framed.next()
+// Note there's also a StreamExt in tokio-stream which covers
+// streams, but we it's not the same and we don't care about the
+// difference here
+use futures::{SinkExt, TryStreamExt};
 
 use crate::args::args;
+use crate::state;
+
+mod proto;
 
 pub async fn listen() -> tokio::task::JoinHandle<()> {
     info!("listening to {}", args().ircd_listen);
@@ -40,26 +44,45 @@ async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
 
 async fn handle_client(stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     debug!("Awaiting auth");
-    let irc_nick = irc_auth_loop(stream).await?;
-    info!("Login from {}", irc_nick);
+    let (nick, user, _pass) = auth_loop(stream).await?;
+    info!("Authenticated {}!{}", nick, user);
     Ok(())
 }
 
-async fn irc_auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<String> {
+async fn auth_loop(mut stream: Framed<TcpStream, IrcCodec>) -> Result<(String, String, String)> {
     let mut client_nick = None;
+    let mut client_user = None;
+    let mut client_pass = None;
     while let Some(event) = stream.try_next().await? {
+        trace!("auth loop: got {:?}", event);
         match event.command {
             Command::NICK(nick) => client_nick = Some(nick),
-            _ => {
-                return Err(Error::msg(format!(
-                    "Unexpected preauth message {:?}",
-                    event
-                )))
+            Command::PASS(pass) => client_pass = Some(pass),
+            Command::USER(user, _, _) => {
+                client_user = Some(user);
+                break;
             }
+            Command::CAP(_, _, Some(code), _) => {
+                // required for recent-ish versions of irssi
+                if code == "302" {
+                    stream
+                        .send(proto::raw_msg(":matrirc CAP * LS :".to_string()))
+                        .await?;
+                }
+            }
+            _ => (), // ignore
         }
     }
-    return match client_nick {
-        Some(nick) => Ok(nick),
-        None => Err(Error::msg("No nick for client!")),
-    };
+    if let (Some(nick), Some(user), Some(pass)) = (client_nick, client_user, client_pass) {
+        info!("Processing login from {}!{}", nick, user);
+        match state::login(&nick, &pass) {
+            Ok(()) => Ok((nick, user, pass)),
+            Err(e) => {
+                stream.send(proto::raw_msg(e.to_string())).await?;
+                Err(e)
+            }
+        }
+    } else {
+        Err(Error::msg("nick or pass wasn't set for client!"))
+    }
 }
