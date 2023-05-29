@@ -19,6 +19,3 @@ where
 {
     stream.send(raw_msg(msg)).await.context("send_raw_msg")
 }
-
-//fn privmsg(prefix: String, target: String, message: String) {
-//pub fn privmsg
