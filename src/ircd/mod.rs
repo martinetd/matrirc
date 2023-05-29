@@ -44,7 +44,7 @@ async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
 
 async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     debug!("Awaiting auth");
-    let (nick, user, _pass) = match auth_loop(&mut stream).await {
+    let (nick, user, _matrix_client) = match auth_loop(&mut stream).await {
         Ok(data) => data,
         Err(e) => {
             // keep original error, but try to tell client we're not ok
@@ -56,7 +56,9 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     Ok(())
 }
 
-async fn auth_loop(stream: &mut Framed<TcpStream, IrcCodec>) -> Result<(String, String, String)> {
+async fn auth_loop(
+    stream: &mut Framed<TcpStream, IrcCodec>,
+) -> Result<(String, String, matrix_sdk::Client)> {
     let mut client_nick = None;
     let mut client_user = None;
     let mut client_pass = None;
@@ -83,10 +85,12 @@ async fn auth_loop(stream: &mut Framed<TcpStream, IrcCodec>) -> Result<(String, 
         match state::login(&nick, &pass)? {
             Some(_session) => {
                 // restore matrix session
-                Ok((nick, user, pass))
+                let client = matrix_login_loop(stream, &nick, &pass).await?;
+                Ok((nick, user, client))
             }
             None => {
-                // matrix login
+                // new user allowed, register user on success
+                let client = matrix_login_loop(stream, &nick, &pass).await?;
                 state::create_user(
                     &nick,
                     &pass,
@@ -94,10 +98,21 @@ async fn auth_loop(stream: &mut Framed<TcpStream, IrcCodec>) -> Result<(String, 
                         homeserver: "test".to_string(),
                     },
                 )?;
-                Ok((nick, user, pass))
+                Ok((nick, user, client))
             }
         }
     } else {
         Err(Error::msg("nick or pass wasn't set for client!"))
     }
+}
+
+async fn matrix_login_loop(
+    stream: &mut Framed<TcpStream, IrcCodec>,
+    nick: &str,
+    pass: &str,
+) -> Result<matrix_sdk::Client> {
+    let _ = stream;
+    let _ = nick;
+    let _ = pass;
+    Err(Error::msg("not implemented"))
 }
