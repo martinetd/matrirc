@@ -4,11 +4,11 @@ use log::{debug, info, trace};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::Framed;
-// for Framed.send() / Framed.next()
+// for Framed.tryNext()
 // Note there's also a StreamExt in tokio-stream which covers
 // streams, but we it's not the same and we don't care about the
 // difference here
-use futures::{SinkExt, TryStreamExt};
+use futures::TryStreamExt;
 
 use crate::args::args;
 use crate::state;
@@ -48,9 +48,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         Ok(data) => data,
         Err(e) => {
             // keep original error, but try to tell client we're not ok
-            let _ = stream
-                .send(proto::raw_msg(format!("Closing session: {}", e)))
-                .await;
+            let _ = proto::send_raw_msg(&mut stream, format!("Closing session: {}", e)).await;
             return Err(e);
         }
     };
@@ -74,9 +72,7 @@ async fn auth_loop(stream: &mut Framed<TcpStream, IrcCodec>) -> Result<(String, 
             Command::CAP(_, _, Some(code), _) => {
                 // required for recent-ish versions of irssi
                 if code == "302" {
-                    stream
-                        .send(proto::raw_msg(":matrirc CAP * LS :".to_string()))
-                        .await?;
+                    proto::send_raw_msg(stream, ":matrirc CAP * LS :".to_string()).await?;
                 }
             }
             _ => (), // ignore
