@@ -74,7 +74,7 @@ async fn auth_loop(
             Command::CAP(_, _, Some(code), _) => {
                 // required for recent-ish versions of irssi
                 if code == "302" {
-                    proto::send_raw_msg(stream, ":matrirc CAP * LS :".to_string()).await?;
+                    proto::send_raw_msg(stream, ":matrirc CAP * LS :").await?;
                 }
             }
             _ => (), // ignore
@@ -111,8 +111,13 @@ async fn matrix_login_loop(
     nick: &str,
     pass: &str,
 ) -> Result<matrix_sdk::Client> {
-    let _ = stream;
-    let _ = nick;
+    proto::send_privmsg(
+        stream,
+        "test",
+        nick,
+        "Welcome to matrirc. Please login to matrix by replying with: <homeserver> <user> <pass>",
+    )
+    .await?;
     let _ = pass;
     Err(Error::msg("not implemented"))
 }
