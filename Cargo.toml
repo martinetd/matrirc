@@ -20,7 +20,7 @@ env_logger = "0.10"
 futures = "0.3"
 irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "3d037df761b4ec1da6811cc8481c18cfb2799dc7" }
 log = "0.4"
-matrix-sdk = { version = "0.6", features = ["anyhow"] }
+matrix-sdk = { features = ["anyhow"], git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "623ff6fa8308c8f1c91b17082d70df9e53e976cf" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = "1.0"
 serde_json = "1.0"

@@ -13,15 +13,15 @@ pub async fn restore_session(
 ) -> Result<Client> {
     let db_path = Path::new(&args().state_dir)
         .join(db_nick)
-        .join("sled_store");
+        .join("sqlite_store");
     debug!("Connection to matrix for {}", db_nick);
     let client = Client::builder()
         .homeserver_url(homeserver)
-        .sled_store(db_path, Some(db_pass))?
+        .sqlite_store(db_path, Some(db_pass))
         .build()
         .await?;
     debug!("Restoring session for {}", db_nick);
-    client.restore_login(session).await?;
+    client.restore_session(session).await?;
     Ok(client)
 }
 
@@ -34,11 +34,11 @@ pub async fn login(
 ) -> Result<Client> {
     let db_path = Path::new(&args().state_dir)
         .join(db_nick)
-        .join("sled_store");
+        .join("sqlite_store");
     debug!("Connection to matrix for {}", db_nick);
     let client = Client::builder()
         .homeserver_url(homeserver)
-        .sled_store(db_path, Some(db_pass))?
+        .sqlite_store(db_path, Some(db_pass))
         .build()
         .await?;
     debug!("Logging in to matrix for {} (user {})", db_nick, user);
