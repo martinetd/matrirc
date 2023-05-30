@@ -22,7 +22,7 @@ use crate::args::args;
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Session {
     pub homeserver: String,
-    //pub matrix_session: matrix_sdk::Session;
+    pub matrix_session: matrix_sdk::Session,
 }
 
 /// data required for decryption
