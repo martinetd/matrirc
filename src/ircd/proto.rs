@@ -48,10 +48,12 @@ where
 
 /// send privmsg to target, coming as from, with given content.
 /// target should be user's nick for private messages or channel name
-pub async fn send_privmsg<'a, S, T>(stream: &mut S, from: T, target: T, msg: T) -> Result<()>
+pub async fn send_privmsg<'a, S, T, U, V>(stream: &mut S, from: T, target: U, msg: V) -> Result<()>
 where
     S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
     T: Into<String>,
+    U: Into<String>,
+    V: Into<String>,
 {
     send_cmd(
         stream,
