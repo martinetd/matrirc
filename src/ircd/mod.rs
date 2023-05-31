@@ -57,21 +57,23 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         }
     };
     info!("Authenticated {}!{}", nick, user);
-    let (writer, _reader) = stream.split();
+    let (writer, reader_stream) = stream.split();
     let (irc_sink, irc_sink_rx) = mpsc::channel::<Message>(100);
     tokio::spawn(async move {
-        if let Err(e) = proto::irc_write_thread(writer, irc_sink_rx).await {
-            info!("irc write thread failed: {}", e);
+        if let Err(e) = proto::ircd_sync_write(writer, irc_sink_rx).await {
+            info!("irc write task failed: {}", e);
         }
     });
     let irc = IrcClient::new(irc_sink);
     let matrirc = Matrirc::new(matrix, irc);
+    let reader_matrirc = matrirc.clone();
     // TODO
     // setup matrix handlers
     // spawn matrix sync while matrirc.running
-    // listen to reader until socket closed
-    // set running to false / send quit
     matrirc.irc().send_privmsg("matrirc", nick, "okay").await?;
+    if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {
+        info!("irc read task failed: {}", e);
+    }
     matrirc.stop("Reached end of handle_client").await?;
     Ok(())
 }

@@ -1,6 +1,6 @@
 use anyhow::Result;
-use futures::stream::SplitSink;
-use futures::SinkExt;
+use futures::stream::{SplitSink, SplitStream};
+use futures::{SinkExt, TryStreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::IrcCodec;
 use log::info;
@@ -8,6 +8,8 @@ use std::cmp::min;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
+
+use crate::matrirc::Matrirc;
 
 fn message_of<'a, S>(prefix: S, command: Command) -> Message
 where
@@ -58,7 +60,7 @@ where
     message_of_noprefix(Command::ERROR(reason.into()))
 }
 
-pub async fn irc_write_thread(
+pub async fn ircd_sync_write(
     mut writer: SplitSink<Framed<TcpStream, IrcCodec>, Message>,
     mut irc_sink_rx: mpsc::Receiver<Message>,
 ) -> Result<()> {
@@ -67,12 +69,23 @@ pub async fn irc_write_thread(
             Command::ERROR(_) => {
                 writer.send(message).await?;
                 writer.close().await?;
-                info!("Stopping write thread to quit");
+                info!("Stopping write task to quit");
                 return Ok(());
             }
             _ => writer.send(message).await?,
         }
     }
-    info!("Stopping write thread to sink closed");
+    info!("Stopping write task to sink closed");
+    Ok(())
+}
+
+pub async fn ircd_sync_read(
+    mut reader: SplitStream<Framed<TcpStream, IrcCodec>>,
+    matrirc: Matrirc,
+) -> Result<()> {
+    while let Some(message) = reader.try_next().await? {
+        info!("Got message {}", message);
+    }
+    info!("Stopping read task to stream closed");
     Ok(())
 }
