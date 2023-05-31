@@ -1,18 +1,11 @@
 use anyhow::Result;
 use irc::client::prelude::Message;
-use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::ircd::proto;
 
-#[derive(Clone, Debug)]
-pub struct IrcClient {
-    /// wrap around Arc for clone
-    inner: Arc<IrcClientInner>,
-}
-
 #[derive(Debug)]
-struct IrcClientInner {
+pub struct IrcClient {
     /// Avoid waiting on network: queue messages for another task
     /// to actually do the sending.
     /// read in one place and kept private
@@ -22,15 +15,12 @@ struct IrcClientInner {
 impl IrcClient {
     pub fn new(sink: mpsc::Sender<Message>) -> IrcClient {
         IrcClient {
-            inner: IrcClientInner {
-                sink: Mutex::new(sink),
-            }
-            .into(),
+            sink: Mutex::new(sink),
         }
     }
 
-    async fn send(&self, msg: Message) -> Result<()> {
-        self.inner.sink.lock().await.send(msg).await?;
+    pub async fn send(&self, msg: Message) -> Result<()> {
+        self.sink.lock().await.send(msg).await?;
         Ok(())
     }
 

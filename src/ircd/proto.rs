@@ -54,6 +54,13 @@ where
     message_of(from, Command::PRIVMSG(target.into(), msg.into()))
 }
 
+pub fn error<'a, S>(reason: S) -> Message
+where
+    S: Into<String>,
+{
+    message_of_noprefix(Command::ERROR(reason.into()))
+}
+
 /// only used during login
 pub async fn send_raw_msg<'a, S, T>(stream: &mut S, msg: T) -> Result<()>
 where
@@ -82,7 +89,7 @@ pub async fn irc_write_thread(
 ) -> Result<()> {
     while let Some(message) = irc_sink_rx.recv().await {
         match message.command {
-            Command::QUIT(_) => {
+            Command::ERROR(_) => {
                 writer.send(message).await?;
                 writer.close().await?;
                 info!("Stopping write thread to quit");

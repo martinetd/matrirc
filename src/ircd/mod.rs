@@ -11,9 +11,11 @@ use tokio_util::codec::Framed;
 use crate::args::args;
 use crate::matrirc::Matrirc;
 
-pub mod client;
+mod client;
 mod login;
-mod proto;
+pub mod proto;
+
+pub use client::IrcClient;
 
 pub async fn listen() -> tokio::task::JoinHandle<()> {
     info!("listening to {}", args().ircd_listen);
@@ -60,13 +62,14 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
             info!("irc write thread failed: {}", e);
         }
     });
-    let irc = client::IrcClient::new(irc_sink);
+    let irc = IrcClient::new(irc_sink);
     let matrirc = Matrirc::new(matrix, irc);
     // TODO
     // setup matrix handlers
     // spawn matrix sync while matrirc.running
     // listen to reader until socket closed
     // set running to false / send quit
-    matrirc.irc.send_privmsg("matrirc", nick, "okay").await?;
+    matrirc.irc().send_privmsg("matrirc", nick, "okay").await?;
+    matrirc.stop("Reached end of handle_client").await?;
     Ok(())
 }
