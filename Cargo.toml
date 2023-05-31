@@ -18,8 +18,10 @@ chacha20poly1305 = { version = "0.9.0", features = ["alloc"], default-features =
 clap = { version = "4.3.0", features = ["derive"] }
 env_logger = "0.10"
 futures = "0.3"
+# irc: tokio util codec 0.7 support not released
 irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "3d037df761b4ec1da6811cc8481c18cfb2799dc7" }
 log = "0.4"
+# matrix-sdk: 0.6.2 is already old, restart from main
 matrix-sdk = { features = ["anyhow"], git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "623ff6fa8308c8f1c91b17082d70df9e53e976cf" }
 rand_core = { version = "0.6", features = ["getrandom"] }
 serde = "1.0"

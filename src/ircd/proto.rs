@@ -1,53 +1,68 @@
 use anyhow::{Context, Result};
+use futures::stream::SplitSink;
 use futures::SinkExt;
+use irc::proto::IrcCodec;
 use irc::{
     client::prelude::{Command, Message, Prefix},
     proto::error::ProtocolError,
 };
+use log::info;
 use std::cmp::min;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc;
+use tokio_util::codec::Framed;
 
-/// Wrapper to send command to given stream
-async fn send_cmd<'a, S, T>(stream: &mut S, prefix: Option<T>, command: Command) -> Result<()>
+fn message_of<'a, S>(prefix: S, command: Command) -> Message
 where
-    S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
+    S: Into<String>,
+{
+    Message {
+        tags: None,
+        prefix: {
+            let p: String = prefix.into();
+            let user = p[..min(p.len(), 6)].to_string();
+            Some(Prefix::Nickname(p, user, "matrirc".to_string()))
+        },
+        command,
+    }
+}
+
+fn message_of_noprefix(command: Command) -> Message {
+    Message {
+        tags: None,
+        prefix: None,
+        command,
+    }
+}
+
+/// msg to client as is without any formatting
+pub fn raw_msg<'a, S>(msg: S) -> Message
+where
+    S: Into<String>,
+{
+    message_of_noprefix(Command::Raw(msg.into(), vec![]))
+}
+
+/// privmsg to target, coming as from, with given content.
+/// target should be user's nick for private messages or channel name
+pub fn privmsg<'a, S, T, U>(from: S, target: T, msg: U) -> Message
+where
+    S: Into<String>,
     T: Into<String>,
+    U: Into<String>,
 {
-    stream
-        .send(Message {
-            tags: None,
-            prefix: prefix.and_then(|p| {
-                let s: String = p.into();
-                let user = s[..min(s.len(), 6)].to_string();
-                Some(Prefix::Nickname(s, user, "matrirc".to_string()))
-            }),
-            command,
-        })
-        .await
-        .context("send_cmd")
+    message_of(from, Command::PRIVMSG(target.into(), msg.into()))
 }
 
-/// Wrapper for send_cmd just to cast None as some specific
-/// option type (required because async functions embed their types)
-async fn send_cmd_noprefix<'a, S>(stream: &mut S, command: Command) -> Result<()>
-where
-    S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
-{
-    send_cmd(stream, None as Option<String>, command).await
-}
-
-/// send msg to client as is without any formatting
+/// only used during login
 pub async fn send_raw_msg<'a, S, T>(stream: &mut S, msg: T) -> Result<()>
 where
     S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
     T: Into<String>,
 {
-    send_cmd_noprefix(stream, Command::Raw(msg.into(), vec![]))
-        .await
-        .context("send_raw_msg")
+    stream.send(raw_msg(msg)).await.context("send_raw_msg")
 }
 
-/// send privmsg to target, coming as from, with given content.
-/// target should be user's nick for private messages or channel name
 pub async fn send_privmsg<'a, S, T, U, V>(stream: &mut S, from: T, target: U, msg: V) -> Result<()>
 where
     S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
@@ -55,11 +70,27 @@ where
     U: Into<String>,
     V: Into<String>,
 {
-    send_cmd(
-        stream,
-        Some(from),
-        Command::PRIVMSG(target.into(), msg.into()),
-    )
-    .await
-    .context("send_privmsg")
+    stream
+        .send(privmsg(from, target, msg))
+        .await
+        .context("send_privmsg")
+}
+
+pub async fn irc_write_thread(
+    mut writer: SplitSink<Framed<TcpStream, IrcCodec>, Message>,
+    mut irc_sink_rx: mpsc::Receiver<Message>,
+) -> Result<()> {
+    while let Some(message) = irc_sink_rx.recv().await {
+        match message.command {
+            Command::QUIT(_) => {
+                writer.send(message).await?;
+                writer.close().await?;
+                info!("Stopping write thread to quit");
+                return Ok(());
+            }
+            _ => writer.send(message).await?,
+        }
+    }
+    info!("Stopping write thread to sink closed");
+    Ok(())
 }

@@ -1,5 +1,6 @@
 mod args;
 mod ircd;
+mod matrirc;
 mod matrix;
 mod state;
 

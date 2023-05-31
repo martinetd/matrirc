@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
+use futures::StreamExt;
+use irc::client::prelude::Message;
 use irc::proto::IrcCodec;
 use log::{debug, info};
 use std::net::SocketAddr;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use crate::args::args;
+use crate::matrirc::Matrirc;
 
+pub mod client;
 mod login;
 mod proto;
 
@@ -39,7 +44,7 @@ async fn handle_connection(socket: TcpStream, addr: SocketAddr) -> Result<()> {
 
 async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     debug!("Awaiting auth");
-    let (nick, user, _matrix_client) = match login::auth_loop(&mut stream).await {
+    let (nick, user, matrix) = match login::auth_loop(&mut stream).await {
         Ok(data) => data,
         Err(e) => {
             // keep original error, but try to tell client we're not ok
@@ -48,5 +53,20 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         }
     };
     info!("Authenticated {}!{}", nick, user);
+    let (writer, _reader) = stream.split();
+    let (irc_sink, irc_sink_rx) = mpsc::channel::<Message>(100);
+    tokio::spawn(async move {
+        if let Err(e) = proto::irc_write_thread(writer, irc_sink_rx).await {
+            info!("irc write thread failed: {}", e);
+        }
+    });
+    let irc = client::IrcClient::new(irc_sink);
+    let matrirc = Matrirc::new(matrix, irc);
+    // TODO
+    // setup matrix handlers
+    // spawn matrix sync while matrirc.running
+    // listen to reader until socket closed
+    // set running to false / send quit
+    matrirc.irc.send_privmsg("matrirc", nick, "okay").await?;
     Ok(())
 }
