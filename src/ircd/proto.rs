@@ -1,11 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::stream::SplitSink;
 use futures::SinkExt;
+use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::IrcCodec;
-use irc::{
-    client::prelude::{Command, Message, Prefix},
-    proto::error::ProtocolError,
-};
 use log::info;
 use std::cmp::min;
 use tokio::net::TcpStream;
@@ -59,28 +56,6 @@ where
     S: Into<String>,
 {
     message_of_noprefix(Command::ERROR(reason.into()))
-}
-
-/// only used during login
-pub async fn send_raw_msg<'a, S, T>(stream: &mut S, msg: T) -> Result<()>
-where
-    S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
-    T: Into<String>,
-{
-    stream.send(raw_msg(msg)).await.context("send_raw_msg")
-}
-
-pub async fn send_privmsg<'a, S, T, U, V>(stream: &mut S, from: T, target: U, msg: V) -> Result<()>
-where
-    S: SinkExt<Message, Error = ProtocolError> + std::marker::Unpin,
-    T: Into<String>,
-    U: Into<String>,
-    V: Into<String>,
-{
-    stream
-        .send(privmsg(from, target, msg))
-        .await
-        .context("send_privmsg")
 }
 
 pub async fn irc_write_thread(

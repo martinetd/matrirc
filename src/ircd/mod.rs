@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use irc::client::prelude::Message;
 use irc::proto::IrcCodec;
 use log::{debug, info};
@@ -50,7 +50,9 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         Ok(data) => data,
         Err(e) => {
             // keep original error, but try to tell client we're not ok
-            let _ = proto::send_raw_msg(&mut stream, format!("Closing session: {}", e)).await;
+            let _ = stream
+                .send(proto::error(format!("Closing session: {}", e)))
+                .await;
             return Err(e);
         }
     };

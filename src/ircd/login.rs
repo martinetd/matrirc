@@ -7,7 +7,7 @@ use tokio_util::codec::Framed;
 // Note there's also a StreamExt in tokio-stream which covers
 // streams, but we it's not the same and we don't care about the
 // difference here
-use futures::TryStreamExt;
+use futures::{SinkExt, TryStreamExt};
 
 use crate::{ircd::proto, matrix, state};
 
@@ -29,7 +29,7 @@ pub async fn auth_loop(
             Command::CAP(_, _, Some(code), _) => {
                 // required for recent-ish versions of irssi
                 if code == "302" {
-                    proto::send_raw_msg(stream, ":matrirc CAP * LS :").await?;
+                    stream.send(proto::raw_msg(":matrirc CAP * LS :")).await?;
                 }
             }
             _ => (), // ignore
@@ -41,7 +41,12 @@ pub async fn auth_loop(
     };
     // need this to be able to interact with irssi: send welcome before any
     // privmsg exchange even if login isn't over.
-    proto::send_raw_msg(stream, format!(":matrirc 001 {} :Welcome to matrirc", nick)).await?;
+    stream
+        .send(proto::raw_msg(format!(
+            ":matrirc 001 {} :Welcome to matrirc",
+            nick
+        )))
+        .await?;
     info!("Processing login from {}!{}", nick, user);
     let client = match state::login(&nick, &pass)? {
         Some(session) => matrix_restore_session(stream, &nick, &pass, session).await?,
@@ -55,34 +60,32 @@ async fn matrix_login_loop(
     nick: &str,
     irc_pass: &str,
 ) -> Result<matrix_sdk::Client> {
-    proto::send_privmsg(
-        stream,
+    stream.send(proto::privmsg(
         "matrirc",
         nick,
         "Welcome to matrirc. Please login to matrix by replying with: <homeserver> <user> <pass>",
-    )
+    ))
     .await?;
     while let Some(event) = stream.try_next().await? {
         trace!("matrix connection loop: got {:?}", event);
         match event.command {
             Command::PRIVMSG(_, body) => {
                 let [homeserver, user, pass] = body.splitn(3, ' ').collect::<Vec<&str>>()[..] else {
-                    proto::send_privmsg(
-                        stream,
+                    stream.send(proto::privmsg(
                         "matrirc",
                         nick,
                         format!("Message not in <homeserver> <user> <pass> format, ignoring."),
-                    )
+                    ))
                     .await?;
                     continue;
                 };
-                proto::send_privmsg(
-                    stream,
-                    "matrirc",
-                    nick,
-                    format!("Attempting to login to {} with {}", homeserver, user),
-                )
-                .await?;
+                stream
+                    .send(proto::privmsg(
+                        "matrirc",
+                        nick,
+                        format!("Attempting to login to {} with {}", homeserver, user),
+                    ))
+                    .await?;
                 match matrix::login::login(homeserver, user, pass, nick, irc_pass).await {
                     Ok(client) => {
                         state::create_user(
@@ -98,13 +101,13 @@ async fn matrix_login_loop(
                         return Ok(client);
                     }
                     Err(e) => {
-                        proto::send_privmsg(
-                            stream,
-                            "matrirc",
-                            nick,
-                            format!("Login failed: {}. Try again.", e),
-                        )
-                        .await?;
+                        stream
+                            .send(proto::privmsg(
+                                "matrirc",
+                                nick,
+                                format!("Login failed: {}. Try again.", e),
+                            ))
+                            .await?;
                         continue;
                     }
                 }
@@ -121,16 +124,16 @@ async fn matrix_restore_session(
     irc_pass: &str,
     session: state::Session,
 ) -> Result<matrix_sdk::Client> {
-    proto::send_privmsg(
-        stream,
-        "matrirc",
-        nick,
-        format!(
-            "Welcome to matrirc. Restoring session to {}",
-            session.homeserver
-        ),
-    )
-    .await?;
+    stream
+        .send(proto::privmsg(
+            "matrirc",
+            nick,
+            format!(
+                "Welcome to matrirc. Restoring session to {}",
+                session.homeserver
+            ),
+        ))
+        .await?;
     match matrix::login::restore_session(
         &session.homeserver,
         session.matrix_session,
@@ -142,15 +145,14 @@ async fn matrix_restore_session(
         // XXX can't make TryFutureExt's or_else work, give up
         Ok(client) => Ok(client),
         Err(e) => {
-            proto::send_privmsg(
-                stream,
+            stream.send(proto::privmsg(
                 "matrirc",
                 nick,
                 format!(
                     "Restoring session failed: {}. Login again as follow or try to reconnect later.",
                     e
                 ),
-            )
+            ))
             .await?;
 
             matrix_login_loop(stream, nick, irc_pass).await
