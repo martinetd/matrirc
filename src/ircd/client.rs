@@ -10,12 +10,16 @@ pub struct IrcClient {
     /// to actually do the sending.
     /// read in one place and kept private
     pub sink: Mutex<mpsc::Sender<Message>>,
+    pub nick: String,
+    pub user: String,
 }
 
 impl IrcClient {
-    pub fn new(sink: mpsc::Sender<Message>) -> IrcClient {
+    pub fn new(sink: mpsc::Sender<Message>, nick: String, user: String) -> IrcClient {
         IrcClient {
             sink: Mutex::new(sink),
+            nick,
+            user,
         }
     }
 

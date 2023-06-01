@@ -64,13 +64,16 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
             info!("irc write task failed: {}", e);
         }
     });
-    let irc = IrcClient::new(irc_sink);
+    let irc = IrcClient::new(irc_sink, nick, user);
     let matrirc = Matrirc::new(matrix, irc);
     let reader_matrirc = matrirc.clone();
     // TODO
     // setup matrix handlers
     // spawn matrix sync while matrirc.running
-    matrirc.irc().send_privmsg("matrirc", nick, "okay").await?;
+    matrirc
+        .irc()
+        .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
+        .await?;
     if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {
         info!("irc read task failed: {}", e);
     }
