@@ -1,4 +1,5 @@
 use anyhow::Result;
+use lazy_static::lazy_static;
 use log::info;
 use matrix_sdk::{
     config::SyncSettings,
@@ -7,6 +8,7 @@ use matrix_sdk::{
     ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
     LoopCtrl,
 };
+use regex::Regex;
 
 use crate::matrirc::Matrirc;
 
@@ -27,6 +29,10 @@ async fn on_room_message(
             room.room_id().to_string()
         }
     };
+    lazy_static! {
+        static ref SANITIZE: Regex = Regex::new("[ !@]").unwrap();
+    }
+    let room_name = SANITIZE.replace_all(&room_name, "");
 
     match event.content.msgtype {
         MessageType::Text(text_content) => {
