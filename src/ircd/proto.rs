@@ -3,7 +3,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, TryStreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::IrcCodec;
-use log::info;
+use log::{info, trace};
 use std::cmp::min;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -35,11 +35,12 @@ fn message_of_noprefix(command: Command) -> Message {
 }
 
 /// msg to client as is without any formatting
-pub fn raw_msg<'a, S>(msg: S) -> Message
-where
-    S: Into<String>,
-{
+pub fn raw_msg<'a, S: Into<String>>(msg: S) -> Message {
     message_of_noprefix(Command::Raw(msg.into(), vec![]))
+}
+
+pub fn pong(server: String, server2: Option<String>) -> Message {
+    message_of_noprefix(Command::PONG(server, server2))
 }
 
 /// privmsg to target, coming as from, with given content.
@@ -84,7 +85,18 @@ pub async fn ircd_sync_read(
     matrirc: Matrirc,
 ) -> Result<()> {
     while let Some(message) = reader.try_next().await? {
-        info!("Got message {}", message);
+        trace!("Got message {}", message);
+        match message.command {
+            Command::PING(server, server2) => matrirc.irc().send(pong(server, server2)).await?,
+            Command::PRIVMSG(target, msg) => {
+                // parrot for now, send to matrix next
+                matrirc
+                    .irc()
+                    .send_privmsg(target, &matrirc.irc().nick, msg)
+                    .await?
+            }
+            _ => info!("Unhandled message {}", message),
+        }
     }
     info!("Stopping read task to stream closed");
     Ok(())
