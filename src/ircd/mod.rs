@@ -10,6 +10,7 @@ use tokio_util::codec::Framed;
 
 use crate::args::args;
 use crate::matrirc::Matrirc;
+use crate::matrix;
 
 mod client;
 mod login;
@@ -59,17 +60,30 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     info!("Authenticated {}!{}", nick, user);
     let (writer, reader_stream) = stream.split();
     let (irc_sink, irc_sink_rx) = mpsc::channel::<Message>(100);
+    let irc = IrcClient::new(irc_sink, nick, user);
+    let matrirc = Matrirc::new(matrix, irc);
+
+    let writer_matrirc = matrirc.clone();
     tokio::spawn(async move {
         if let Err(e) = proto::ircd_sync_write(writer, irc_sink_rx).await {
             info!("irc write task failed: {}", e);
         }
+        if let Err(e) = writer_matrirc.stop("irc writer task stopped").await {
+            info!("... and stop failed after that irc write task: {}", e);
+        }
     });
-    let irc = IrcClient::new(irc_sink, nick, user);
-    let matrirc = Matrirc::new(matrix, irc);
+
+    let matrix_matrirc = matrirc.clone();
+    tokio::spawn(async move {
+        if let Err(e) = matrix::matrix_sync(matrix_matrirc.clone()).await {
+            info!("Error in matrix_sync: {}", e);
+        }
+        if let Err(e) = matrix_matrirc.stop("matrix sync task stopped").await {
+            info!("... and stop failed after that matrix sync task: {}", e);
+        }
+    });
+
     let reader_matrirc = matrirc.clone();
-    // TODO
-    // setup matrix handlers
-    // spawn matrix sync while matrirc.running
     matrirc
         .irc()
         .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
