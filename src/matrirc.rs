@@ -3,6 +3,7 @@ use matrix_sdk::Client;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::matrix::room_mappings::Mappings;
 use crate::{ircd, ircd::IrcClient};
 
 /// client state struct
@@ -16,7 +17,11 @@ pub struct Matrirc {
 struct MatrircInner {
     matrix: Client,
     irc: IrcClient,
+    /// stop indicator
     running: RwLock<bool>,
+    /// room mappings in both directions
+    /// implementation in matrix/room_mappings.rs
+    mappings: Mappings,
 }
 
 impl Matrirc {
@@ -26,6 +31,7 @@ impl Matrirc {
                 matrix,
                 irc,
                 running: RwLock::new(true),
+                mappings: Mappings::default(),
             }),
         }
     }
@@ -35,6 +41,9 @@ impl Matrirc {
     }
     pub fn matrix(&self) -> &Client {
         &self.inner.matrix
+    }
+    pub fn mappings(&self) -> &Mappings {
+        &self.inner.mappings
     }
     pub async fn running(&self) -> bool {
         *self.inner.running.read().await

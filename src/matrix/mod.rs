@@ -10,9 +10,11 @@ use matrix_sdk::{
 };
 use regex::Regex;
 
+use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
 
 pub mod login;
+pub mod room_mappings;
 
 async fn on_room_message(
     event: OriginalSyncRoomMessageEvent,
@@ -20,26 +22,20 @@ async fn on_room_message(
     matrirc: Ctx<Matrirc>,
 ) -> Result<()> {
     // ignore non-joined rooms
-    let Room::Joined(room) = room else { return Ok(()) };
-    let room_name = match room.display_name().await {
-        Ok(room_name) => room_name.to_string(),
-        Err(error) => {
-            info!("Error getting room display name: {error}");
-            // Fallback to the room ID.
-            room.room_id().to_string()
-        }
-    };
-    lazy_static! {
-        static ref SANITIZE: Regex = Regex::new("[ !@]").unwrap();
-    }
-    let room_name = SANITIZE.replace_all(&room_name, "");
+    let Room::Joined(_) = room else { return Ok(()) };
+
+    let target = matrirc.mappings().room_target(&room).await;
 
     match event.content.msgtype {
         MessageType::Text(text_content) => {
-            matrirc
-                .irc()
-                .send_privmsg(room_name, &matrirc.irc().nick, text_content.body)
-                .await?
+            target
+                .send_irc_message(
+                    matrirc.irc(),
+                    IrcMessageType::PRIVMSG,
+                    &event.sender,
+                    text_content.body,
+                )
+                .await?;
         }
         _ => info!("Ignored event {:?}", event),
     }

@@ -11,6 +11,33 @@ use tokio_util::codec::Framed;
 
 use crate::matrirc::Matrirc;
 
+/// it's a bit of a pain to redo the work twice for notice/privmsg,
+/// so these types wrap it around a bit
+pub enum IrcMessageType {
+    PRIVMSG,
+    NOTICE,
+}
+pub struct IrcMessage {
+    pub message_type: IrcMessageType,
+    /// source to use for privmsg/similar
+    /// (member name for chan, query name for query)
+    pub from: String,
+    /// target to use for privmsg/similar
+    /// (channel name for chan, None for query: in this case use own nick)
+    pub target: String,
+    /// message content
+    pub message: String,
+}
+
+impl From<IrcMessage> for Message {
+    fn from(message: IrcMessage) -> Self {
+        match message.message_type {
+            IrcMessageType::PRIVMSG => privmsg(message.from, message.target, message.message),
+            IrcMessageType::NOTICE => notice(message.from, message.target, message.message),
+        }
+    }
+}
+
 fn message_of<'a, S>(prefix: S, command: Command) -> Message
 where
     S: Into<String>,
@@ -19,6 +46,8 @@ where
         tags: None,
         prefix: {
             let p: String = prefix.into();
+            // XXX don't compute user from prefix, but use something like
+            // matrix id when available?
             let user = p[..min(p.len(), 6)].to_string();
             Some(Prefix::Nickname(p, user, "matrirc".to_string()))
         },
@@ -52,6 +81,15 @@ where
     U: Into<String>,
 {
     message_of(from, Command::PRIVMSG(target.into(), msg.into()))
+}
+
+pub fn notice<'a, S, T, U>(from: S, target: T, msg: U) -> Message
+where
+    S: Into<String>,
+    T: Into<String>,
+    U: Into<String>,
+{
+    message_of(from, Command::NOTICE(target.into(), msg.into()))
 }
 
 pub fn error<'a, S>(reason: S) -> Message

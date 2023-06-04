@@ -67,20 +67,20 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     tokio::spawn(async move {
         if let Err(e) = proto::ircd_sync_write(writer, irc_sink_rx).await {
             info!("irc write task failed: {}", e);
+        } else {
+            info!("irc write task done");
         }
-        if let Err(e) = writer_matrirc.stop("irc writer task stopped").await {
-            info!("... and stop failed after that irc write task: {}", e);
-        }
+        let _ = writer_matrirc.stop("irc writer task stopped").await;
     });
 
     let matrix_matrirc = matrirc.clone();
     tokio::spawn(async move {
         if let Err(e) = matrix::matrix_sync(matrix_matrirc.clone()).await {
             info!("Error in matrix_sync: {}", e);
+        } else {
+            info!("Stopped matrix sync task");
         }
-        if let Err(e) = matrix_matrirc.stop("matrix sync task stopped").await {
-            info!("... and stop failed after that matrix sync task: {}", e);
-        }
+        let _ = matrix_matrirc.stop("matrix sync task stopped").await;
     });
 
     let reader_matrirc = matrirc.clone();
