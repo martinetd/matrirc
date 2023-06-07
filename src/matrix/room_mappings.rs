@@ -34,27 +34,19 @@ struct Chan {
     /// used to enforce unicity, and perhaps later to convert
     /// `mentions:` to matric mentions
     names: HashMap<String, OwnedUserId>,
-}
-
-#[derive(Debug, Clone)]
-struct JoiningChan {
-    /// The channel
-    chan: Chan,
-    /// list of pending messages: if someone tries to grab
-    /// a chan we're in the process of joining, they should just append
-    /// here and the joining task will submit it when it's done.
+    /// used for error messages, and to queue messages in joinin chan:
+    /// if someone tries to grab a chan we're currently joining they just
+    /// append to it instead of sending message to irc
     /// XXX: If there are any pending messages left when we exit (because e.g. client exited while
     /// we weren't done with join yet), these messages will have been ack'd on matrix side and
     /// won't ever be sent to irc. This should be rare enough but probably worth fixing somehow...
-    /// can we just get room member list and stuff synchronously?
-    pending_messages: Vec<Message>,
+    pending_messages: Vec<IrcMessage>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RoomTarget {
     /// the Arc/RwLock let us return/modify it without holding the mappings lock
     inner: Arc<RwLock<RoomTargetInner>>,
-    error: Arc<Option<String>>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,9 +58,8 @@ enum RoomTargetInner {
     /// room maps to a chan, but we're not joined: will force join
     /// on next message or user can join if they want
     LeftChan(Chan),
-    /// currently being joined chan, don't rush...
-    /// The vec is
-    JoiningChan(JoiningChan),
+    /// Join in progress
+    JoiningChan(Chan),
 }
 
 #[derive(Default, Debug)]
@@ -98,11 +89,12 @@ fn sanitize<'a, S: Into<String>>(str: S) -> String {
 }
 
 impl Chan {
-    fn new(target: String) -> Self {
+    fn new<'a, S: Into<String>>(target: S) -> Self {
         Chan {
-            target,
+            target: sanitize(target),
             members: HashMap::new(),
             names: HashMap::new(),
+            pending_messages: Vec::new(),
         }
     }
     async fn get_member(&self, member_id: &UserId) -> Option<String> {
@@ -110,52 +102,31 @@ impl Chan {
     }
 }
 
-impl JoiningChan {
-    fn new(target: String) -> Self {
-        JoiningChan {
-            chan: Chan::new(target),
-            pending_messages: Vec::new(),
-        }
-    }
-}
-
 impl RoomTarget {
     fn query<'a, S: Into<String>>(target: S) -> Self {
         RoomTarget {
-            inner: Arc::new(RwLock::new(RoomTargetInner::Query(Chan {
-                target: sanitize(target),
-                members: HashMap::new(),
-                names: HashMap::new(),
-            }))),
-            error: Arc::new(None),
+            inner: Arc::new(RwLock::new(RoomTargetInner::Query(Chan::new(target)))),
         }
     }
     fn chan<'a, S: Into<String>>(chan_name: S) -> Self {
         RoomTarget {
-            inner: Arc::new(RwLock::new(RoomTargetInner::JoiningChan(JoiningChan::new(
-                sanitize(chan_name),
-            )))),
-            error: Arc::new(None),
+            inner: Arc::new(RwLock::new(RoomTargetInner::LeftChan(Chan::new(chan_name)))),
         }
     }
 
-    async fn join_chan(&self) -> Result<Vec<Message>> {
+    async fn join_chan(&self) -> Result<()> {
         let mut lock = self.inner.write().await;
-        // XXX can we "move" this instead of copy (*lock) or clone (get ref &*lock + clone)?
-        let (chan, messages) = match &*lock {
-            RoomTargetInner::JoiningChan(JoiningChan {
-                chan,
-                pending_messages,
-            }) => (chan, pending_messages.clone()),
-            RoomTargetInner::LeftChan(chan) => (chan, Vec::new()),
+        let chan = match &*lock {
+            RoomTargetInner::JoiningChan(chan) => chan,
+            RoomTargetInner::LeftChan(chan) => chan,
             _ => return Err(anyhow::Error::msg("invalid room target")),
         };
         *lock = RoomTargetInner::Chan(chan.clone());
-        Ok(messages)
+        Ok(())
     }
 
     fn set_error(mut self, error: String) -> Self {
-        self.error = Arc::new(Some(error));
+        // XXX unpack chan and add to messages
         self
     }
 
@@ -220,16 +191,14 @@ impl RoomTarget {
                     message
                 ),
             },
-            // This one should just queue message
-            RoomTargetInner::JoiningChan(jchan) => IrcMessage {
+            // This one is currently joining, but not there yet: just queue.
+            RoomTargetInner::JoiningChan(chan) => IrcMessage {
                 message_type,
-                from: jchan.chan.target.clone(),
+                from: chan.target.clone(),
                 target: irc.nick.clone(),
                 message: format!(
                     "<{}> {}",
-                    jchan
-                        .chan
-                        .members
+                    chan.members
                         .get(sender_id)
                         .map(Cow::Borrowed)
                         .unwrap_or_else(|| Cow::Owned(sender_id.to_string())),

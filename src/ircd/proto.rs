@@ -13,10 +13,12 @@ use crate::matrirc::Matrirc;
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
 /// so these types wrap it around a bit
+#[derive(Debug, Clone)]
 pub enum IrcMessageType {
     PRIVMSG,
     NOTICE,
 }
+#[derive(Debug, Clone)]
 pub struct IrcMessage {
     pub message_type: IrcMessageType,
     /// source to use for privmsg/similar
