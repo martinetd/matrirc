@@ -171,10 +171,11 @@ impl RoomTarget {
                 message_type,
                 from: chan.target.clone(),
                 target: irc.nick.clone(),
-                message: if let Some(nick) = chan.members.get(sender_id) {
-                    format!("<{}> {}", nick, message)
-                } else {
-                    message.into()
+                message: match chan.members.get(sender_id) {
+                    Some(nick) if nick != &chan.target => {
+                        format!("<{}> {}", nick, message)
+                    }
+                    _ => message.into(),
                 },
             },
 
@@ -281,7 +282,6 @@ impl Mappings {
         drop(mappings);
         for member in members {
             let name = member.name().to_string();
-            // XXX skip main target for query (e.g. roomname == membername)
             // XXX dedup
             target_lock
                 .chan
