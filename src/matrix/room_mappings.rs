@@ -50,16 +50,22 @@ pub struct RoomTarget {
 }
 
 #[derive(Debug, Clone)]
-enum RoomTargetInner {
+enum RoomTargetType {
     /// room maps to a query e.g. single other member (or alone!)
-    Query(Chan),
+    Query,
     /// room maps to a chan, and irc side has it joined
-    Chan(Chan),
+    Chan,
     /// room maps to a chan, but we're not joined: will force join
     /// on next message or user can join if they want
-    LeftChan(Chan),
+    LeftChan,
     /// Join in progress
-    JoiningChan(Chan),
+    JoiningChan,
+}
+
+#[derive(Debug, Clone)]
+struct RoomTargetInner {
+    target_type: RoomTargetType,
+    chan: Chan,
 }
 
 #[derive(Default, Debug)]
@@ -105,23 +111,29 @@ impl Chan {
 impl RoomTarget {
     fn query<'a, S: Into<String>>(target: S) -> Self {
         RoomTarget {
-            inner: Arc::new(RwLock::new(RoomTargetInner::Query(Chan::new(target)))),
+            inner: Arc::new(RwLock::new(RoomTargetInner {
+                target_type: RoomTargetType::Query,
+                chan: Chan::new(target),
+            })),
         }
     }
     fn chan<'a, S: Into<String>>(chan_name: S) -> Self {
         RoomTarget {
-            inner: Arc::new(RwLock::new(RoomTargetInner::LeftChan(Chan::new(chan_name)))),
+            inner: Arc::new(RwLock::new(RoomTargetInner {
+                target_type: RoomTargetType::LeftChan,
+                chan: Chan::new(chan_name),
+            })),
         }
     }
 
     async fn join_chan(&self) -> Result<()> {
         let mut lock = self.inner.write().await;
-        let chan = match &*lock {
-            RoomTargetInner::JoiningChan(chan) => chan,
-            RoomTargetInner::LeftChan(chan) => chan,
+        match &lock.target_type {
+            RoomTargetType::JoiningChan => (),
+            RoomTargetType::LeftChan => (),
             _ => return Err(anyhow::Error::msg("invalid room target")),
         };
-        *lock = RoomTargetInner::Chan(chan.clone());
+        lock.target_type = RoomTargetType::Chan;
         Ok(())
     }
 
@@ -152,11 +164,14 @@ impl RoomTarget {
         S: Into<String> + std::fmt::Display,
     {
         let message: Message = match &*self.inner.read().await {
-            RoomTargetInner::Query(target) => IrcMessage {
+            RoomTargetInner {
+                target_type: RoomTargetType::Query,
+                chan,
+            } => IrcMessage {
                 message_type,
-                from: target.target.clone(),
+                from: chan.target.clone(),
                 target: irc.nick.clone(),
-                message: if let Some(nick) = target.members.get(sender_id) {
+                message: if let Some(nick) = chan.members.get(sender_id) {
                     format!("<{}> {}", nick, message)
                 } else {
                     message.into()
@@ -164,7 +179,10 @@ impl RoomTarget {
             },
 
             // XXX chans are still queries at this point
-            RoomTargetInner::Chan(chan) => IrcMessage {
+            RoomTargetInner {
+                target_type: RoomTargetType::Chan,
+                chan,
+            } => IrcMessage {
                 message_type,
                 from: chan.target.clone(),
                 target: irc.nick.clone(),
@@ -177,8 +195,12 @@ impl RoomTarget {
                     message
                 ),
             },
+
             // This one should trigger a join and queue message
-            RoomTargetInner::LeftChan(chan) => IrcMessage {
+            RoomTargetInner {
+                target_type: RoomTargetType::LeftChan,
+                chan,
+            } => IrcMessage {
                 message_type,
                 from: chan.target.clone(),
                 target: irc.nick.clone(),
@@ -191,8 +213,12 @@ impl RoomTarget {
                     message
                 ),
             },
+
             // This one is currently joining, but not there yet: just queue.
-            RoomTargetInner::JoiningChan(chan) => IrcMessage {
+            RoomTargetInner {
+                target_type: RoomTargetType::JoiningChan,
+                chan,
+            } => IrcMessage {
                 message_type,
                 from: chan.target.clone(),
                 target: irc.nick.clone(),
