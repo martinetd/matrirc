@@ -1,7 +1,7 @@
 use anyhow::{Error, Result};
 use irc::client::prelude::{Command, Message};
 use lazy_static::lazy_static;
-use log::info;
+use log::{info, trace};
 use matrix_sdk::{
     room::{Room, RoomMember},
     ruma::user_id,
@@ -80,6 +80,9 @@ struct MappingsInner {
     /// chan/query name to room id,
     /// channel names are registered and reserved even if not joined,
     /// but there can be rooms we haven't seen yet
+    /// Note that since we might want to promote/demote chans to query,
+    /// targets does NOT include the hash: foobar = #foobar as far as
+    /// dedup and received (irc -> matrirc) messages go
     /// TODO: add a metacommand to force iterating Matrirc.matrix().rooms() ?
     /// (probably want this to list available query targets too...)
     /// TODO: also reserve 'matrirc', irc.nick()...
@@ -92,6 +95,29 @@ fn sanitize<'a, S: Into<String>>(str: S) -> String {
         static ref SANITIZE: Regex = Regex::new("[^a-zA-Z_-]+").unwrap();
     }
     SANITIZE.replace_all(&str.into(), "").into()
+}
+
+trait InsertDedup<V> {
+    fn insert_deduped(&mut self, orig_key: String, value: V) -> String;
+}
+
+impl<V> InsertDedup<V> for HashMap<String, V> {
+    fn insert_deduped(&mut self, orig_key: String, value: V) -> String {
+        let mut key = orig_key.clone();
+        let mut count = 1;
+        loop {
+            match self.entry(key) {
+                Entry::Vacant(entry) => {
+                    let found = entry.key().clone();
+                    entry.insert(value);
+                    return found;
+                }
+                _ => {}
+            }
+            count += 1;
+            key = format!("{}_{}", orig_key, count);
+        }
+    }
 }
 
 impl Chan {
@@ -270,23 +296,22 @@ impl Mappings {
             // got raced
             return Ok(target.clone());
         }
-        // XXX check dups here
+        // find unique irc name
+        let name = mappings
+            .targets
+            .insert_deduped(name, room.room_id().to_owned().into());
+        trace!("Creating room {}", name);
         let (target, members) = RoomTarget::target_of_room(name.clone(), room).await?;
         mappings.rooms.insert(room.room_id().into(), target.clone());
-        mappings
-            .targets
-            .insert(name, room.room_id().to_owned().into());
 
         // lock target and release mapping lock we no longer need
         let mut target_lock = target.inner.write().await;
         drop(mappings);
         for member in members {
-            let name = member.name().to_string();
-            // XXX dedup
-            target_lock
+            let name = target_lock
                 .chan
                 .names
-                .insert(name.clone(), member.user_id().to_owned());
+                .insert_deduped(member.name().to_string(), member.user_id().to_owned());
             target_lock
                 .chan
                 .members
