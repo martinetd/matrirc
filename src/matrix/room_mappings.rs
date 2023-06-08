@@ -253,16 +253,8 @@ impl Mappings {
         if let Some(target) = self.inner.read().await.rooms.get(room.room_id()) {
             return Ok(target.clone());
         }
-        // create anew and try to insert it...
-        // XXX: missing dedup, check queries and add _x or whatever
-        // Also forbid 'matrirc' and irc.nick in that map (or
-        // add another map for special queries...)
-        // XXX: even if done here we need to do this under lock:
-        // 1/ get mappings write lock, 2/ check race, 3/ find free name,
-        // 4/ create target and 5/ insert to both forward and revert mappings
-        // 6/ get room write lock, 7/ release mappings lock
-        // 8/ fill in room members, 9/ start join process if room?
-        //
+
+        // create a new and try to insert it...
         let name = match room.display_name().await {
             Ok(room_name) => room_name.to_string(),
             Err(error) => {
@@ -270,23 +262,39 @@ impl Mappings {
                 room.room_id().to_string()
             }
         };
-        let target = {
-            let mut mappings = self.inner.write().await;
-            if let Some(target) = mappings.rooms.get(room.room_id()) {
-                // got raced
-                return Ok(target.clone());
-            }
-            // XXX check dups here
-            let (target, _members) = RoomTarget::target_of_room(name.clone(), room).await?;
-            mappings.rooms.insert(room.room_id().into(), target.clone());
-            mappings
-                .targets
-                .insert(name, room.room_id().to_owned().into());
-            // XXX lock target here
-            target
-        };
-        // XXX fill in target members here
+
+        // lock mappings and insert into hashs
+        let mut mappings = self.inner.write().await;
+        if let Some(target) = mappings.rooms.get(room.room_id()) {
+            // got raced
+            return Ok(target.clone());
+        }
+        // XXX check dups here
+        let (target, members) = RoomTarget::target_of_room(name.clone(), room).await?;
+        mappings.rooms.insert(room.room_id().into(), target.clone());
+        mappings
+            .targets
+            .insert(name, room.room_id().to_owned().into());
+
+        // lock target and release mapping lock we no longer need
+        let mut target_lock = target.inner.write().await;
+        drop(mappings);
+        for member in members {
+            let name = member.name().to_string();
+            // XXX skip main target for query (e.g. roomname == membername)
+            // XXX dedup
+            target_lock
+                .chan
+                .names
+                .insert(name.clone(), member.user_id().to_owned());
+            target_lock
+                .chan
+                .members
+                .insert(member.user_id().to_owned(), name);
+        }
         // XXX: start task to start join process (needs irc...)
+        // drop lock explicitly to allow returning target
+        drop(target_lock);
         Ok(target)
     }
     // XXX promote/demote chans on join/leave events:
