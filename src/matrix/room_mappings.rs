@@ -1,24 +1,35 @@
 use anyhow::{Error, Result};
-use irc::client::prelude::{Command, Message};
+use irc::client::prelude::Message;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use matrix_sdk::{
     room::{Room, RoomMember},
-    ruma::user_id,
-    ruma::{OwnedRoomId, OwnedUserId, RoomId, UserId},
+    ruma::{OwnedRoomId, OwnedUserId, UserId},
     RoomMemberships,
 };
 use regex::Regex;
 use std::borrow::Cow;
-use std::collections::hash_map::{Entry, HashMap};
+use std::collections::{
+    hash_map::{Entry, HashMap},
+    VecDeque,
+};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, RwLockReadGuard};
+use tokio::sync::RwLock;
 
 use crate::ircd::{
     proto::{IrcMessage, IrcMessageType},
     IrcClient,
 };
-use crate::matrirc::Matrirc;
+
+#[derive(Debug, Clone)]
+struct TargetMessage {
+    /// privmsg or notice
+    message_type: IrcMessageType,
+    /// will be either from in channel, or added as prefix if different from query name
+    from: String,
+    /// actual message
+    message: String,
+}
 
 #[derive(Debug, Clone)]
 struct Chan {
@@ -40,7 +51,7 @@ struct Chan {
     /// XXX: If there are any pending messages left when we exit (because e.g. client exited while
     /// we weren't done with join yet), these messages will have been ack'd on matrix side and
     /// won't ever be sent to irc. This should be rare enough but probably worth fixing somehow...
-    pending_messages: Vec<IrcMessage>,
+    pending_messages: VecDeque<TargetMessage>,
 }
 
 #[derive(Debug, Clone)]
@@ -49,7 +60,7 @@ pub struct RoomTarget {
     inner: Arc<RwLock<RoomTargetInner>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum RoomTargetType {
     /// room maps to a query e.g. single other member (or alone!)
     Query,
@@ -59,6 +70,7 @@ enum RoomTargetType {
     /// on next message or user can join if they want
     LeftChan,
     /// Join in progress
+    #[allow(unused)]
     JoiningChan,
 }
 
@@ -120,17 +132,45 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
     }
 }
 
+impl TargetMessage {
+    async fn into_irc_message(self, irc: &IrcClient, target: &RoomTarget) -> IrcMessage {
+        match &*target.inner.read().await {
+            RoomTargetInner {
+                /* XXX decomment when channels done
+                 * target_type: RoomTargetType::Query, */
+                chan,
+                ..
+            } => IrcMessage {
+                message_type: self.message_type,
+                from: chan.target.clone(),
+                target: irc.nick.clone(),
+                message: if self.from == chan.target {
+                    self.message
+                } else {
+                    format!("<{}> {}", self.from, self.message)
+                },
+            },
+            /*
+            // only makes sense if it's joined, check and fallback to query?
+            RoomTargetInner { chan, .. } => IrcMessage {
+                message_type: self.message_type,
+                from: self.from,
+                target: format!("#{}", chan.target),
+                message: self.message,
+            },
+            */
+        }
+    }
+}
+
 impl Chan {
     fn new<'a, S: Into<String>>(target: S) -> Self {
         Chan {
             target: sanitize(target),
             members: HashMap::new(),
             names: HashMap::new(),
-            pending_messages: Vec::new(),
+            pending_messages: VecDeque::new(),
         }
-    }
-    async fn get_member(&self, member_id: &UserId) -> Option<String> {
-        self.members.get(member_id).cloned()
     }
 }
 
@@ -152,6 +192,7 @@ impl RoomTarget {
         }
     }
 
+    #[allow(unused)]
     async fn join_chan(&self) -> Result<()> {
         let mut lock = self.inner.write().await;
         match &lock.target_type {
@@ -163,8 +204,19 @@ impl RoomTarget {
         Ok(())
     }
 
-    fn set_error(mut self, error: String) -> Self {
-        // XXX unpack chan and add to messages
+    /// error will be sent next time a message from channel is sent
+    /// (or when it's finished joining in case of chan trying to join)
+    async fn set_error(self, error: String) -> Self {
+        self.inner
+            .write()
+            .await
+            .chan
+            .pending_messages
+            .push_back(TargetMessage {
+                message_type: IrcMessageType::NOTICE,
+                from: "matrirc".to_string(),
+                message: error,
+            });
         self
     }
 
@@ -189,76 +241,71 @@ impl RoomTarget {
     where
         S: Into<String> + std::fmt::Display,
     {
+        // accept some race to avoid taking write lock: won't need it 99% of the time
+        if !self.inner.read().await.chan.pending_messages.is_empty() {
+            while let Some(target_message) =
+                self.inner.write().await.chan.pending_messages.pop_front()
+            {
+                let message: Message = target_message.into_irc_message(irc, self).await.into();
+                irc.send(message).await?
+            }
+        }
         let message: Message = match &*self.inner.read().await {
             RoomTargetInner {
                 target_type: RoomTargetType::Query,
                 chan,
-            } => IrcMessage {
+            } => TargetMessage {
                 message_type,
-                from: chan.target.clone(),
-                target: irc.nick.clone(),
-                message: match chan.members.get(sender_id) {
-                    Some(nick) if nick != &chan.target => {
-                        format!("<{}> {}", nick, message)
-                    }
-                    _ => message.into(),
-                },
+                from: chan
+                    .members
+                    .get(sender_id)
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(sender_id.to_string()))
+                    .to_string(),
+                message: message.into(),
             },
 
             // XXX chans are still queries at this point
             RoomTargetInner {
                 target_type: RoomTargetType::Chan,
                 chan,
-            } => IrcMessage {
+            } => TargetMessage {
                 message_type,
-                from: chan.target.clone(),
-                target: irc.nick.clone(),
-                message: format!(
-                    "<{}> {}",
-                    chan.members
-                        .get(sender_id)
-                        .map(Cow::Borrowed)
-                        .unwrap_or_else(|| Cow::Owned(sender_id.to_string())),
-                    message
-                ),
+                from: chan
+                    .members
+                    .get(sender_id)
+                    .map(Cow::Borrowed)
+                    .unwrap_or_else(|| Cow::Owned(sender_id.to_string()))
+                    .to_string(),
+                message: message.into(),
             },
 
             // This one should trigger a join and queue message
-            RoomTargetInner {
-                target_type: RoomTargetType::LeftChan,
-                chan,
-            } => IrcMessage {
-                message_type,
-                from: chan.target.clone(),
-                target: irc.nick.clone(),
-                message: format!(
-                    "<{}> {}",
-                    chan.members
-                        .get(sender_id)
-                        .map(Cow::Borrowed)
-                        .unwrap_or_else(|| Cow::Owned(sender_id.to_string())),
-                    message
-                ),
-            },
-
-            // This one is currently joining, but not there yet: just queue.
-            RoomTargetInner {
-                target_type: RoomTargetType::JoiningChan,
-                chan,
-            } => IrcMessage {
-                message_type,
-                from: chan.target.clone(),
-                target: irc.nick.clone(),
-                message: format!(
-                    "<{}> {}",
-                    chan.members
-                        .get(sender_id)
-                        .map(Cow::Borrowed)
-                        .unwrap_or_else(|| Cow::Owned(sender_id.to_string())),
-                    message
-                ),
-            },
+            RoomTargetInner { target_type, chan } => {
+                self.inner
+                    .write()
+                    .await
+                    .chan
+                    .pending_messages
+                    .push_back(TargetMessage {
+                        message_type,
+                        from: chan
+                            .members
+                            .get(sender_id)
+                            .map(Cow::Borrowed)
+                            .unwrap_or_else(|| Cow::Owned(sender_id.to_string()))
+                            .to_string(),
+                        message: message.into(),
+                    });
+                if *target_type == RoomTargetType::LeftChan {
+                    info!("Joining chan {}", chan.target);
+                    // XXX kick thread
+                }
+                return Ok(());
+            }
         }
+        .into_irc_message(irc, self)
+        .await
         .into();
         irc.send(message).await
     }
@@ -272,6 +319,7 @@ impl Mappings {
                 // return temporary error channel
                 RoomTarget::query("matrirc")
                     .set_error(format!("Could not find or create target: {}", e))
+                    .await
             }
         }
     }

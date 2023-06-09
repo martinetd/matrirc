@@ -1,5 +1,4 @@
 use anyhow::Result;
-use lazy_static::lazy_static;
 use log::info;
 use matrix_sdk::{
     config::SyncSettings,
@@ -8,7 +7,6 @@ use matrix_sdk::{
     ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
     LoopCtrl,
 };
-use regex::Regex;
 
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
