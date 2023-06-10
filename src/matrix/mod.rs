@@ -27,7 +27,7 @@ async fn on_room_message(
     match event.content.msgtype {
         MessageType::Text(text_content) => {
             target
-                .send_irc_message(
+                .send_to_irc(
                     matrirc.irc(),
                     IrcMessageType::PRIVMSG,
                     &event.sender,

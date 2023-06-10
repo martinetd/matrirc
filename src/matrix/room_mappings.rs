@@ -1,9 +1,11 @@
 use anyhow::{Error, Result};
+use async_trait::async_trait;
 use irc::client::prelude::Message;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use matrix_sdk::{
     room::{Room, RoomMember},
+    ruma::events::room::message::RoomMessageEventContent,
     ruma::{OwnedRoomId, OwnedUserId, UserId},
     RoomMemberships,
 };
@@ -80,25 +82,25 @@ struct RoomTargetInner {
     chan: Chan,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub struct Mappings {
     inner: RwLock<MappingsInner>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 struct MappingsInner {
     /// matrix room id to either chan or query
     rooms: HashMap<OwnedRoomId, RoomTarget>,
-    /// chan/query name to room id,
-    /// channel names are registered and reserved even if not joined,
-    /// but there can be rooms we haven't seen yet
+    /// chan/query name to something that'll eat our message.
+    /// For matrix rooms, it'll just send to the room as appropriate.
+    ///
     /// Note that since we might want to promote/demote chans to query,
     /// targets does NOT include the hash: foobar = #foobar as far as
     /// dedup and received (irc -> matrirc) messages go
     /// TODO: add a metacommand to force iterating Matrirc.matrix().rooms() ?
     /// (probably want this to list available query targets too...)
     /// TODO: also reserve 'matrirc', irc.nick()...
-    targets: HashMap<String, Arc<OwnedRoomId>>,
+    targets: HashMap<String, Box<dyn MessageHandler + Send + Sync>>,
 }
 
 fn sanitize<'a, S: Into<String>>(str: S) -> String {
@@ -128,6 +130,27 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
             }
             count += 1;
             key = format!("{}_{}", orig_key, count);
+        }
+    }
+}
+
+#[async_trait]
+trait MessageHandler {
+    async fn handle_message(&self, message: String) -> Result<()>;
+}
+
+#[async_trait]
+impl MessageHandler for Room {
+    async fn handle_message(&self, message: String) -> Result<()> {
+        if let Room::Joined(joined) = self {
+            let content = RoomMessageEventContent::text_plain(message);
+            joined.send(content, None).await?;
+            Ok(())
+        } else {
+            Err(Error::msg(format!(
+                "Room {} was not joined",
+                self.room_id()
+            )))
         }
     }
 }
@@ -231,7 +254,7 @@ impl RoomTarget {
         }
     }
 
-    pub async fn send_irc_message<'a, S>(
+    pub async fn send_to_irc<'a, S>(
         &self,
         irc: &IrcClient,
         message_type: IrcMessageType,
@@ -347,7 +370,7 @@ impl Mappings {
         // find unique irc name
         let name = mappings
             .targets
-            .insert_deduped(name, room.room_id().to_owned().into());
+            .insert_deduped(name, Box::new(room.clone()));
         trace!("Creating room {}", name);
         let (target, members) = RoomTarget::target_of_room(name.clone(), room).await?;
         mappings.rooms.insert(room.room_id().into(), target.clone());
@@ -369,6 +392,14 @@ impl Mappings {
         // drop lock explicitly to allow returning target
         drop(target_lock);
         Ok(target)
+    }
+    pub async fn to_matrix(&self, name: &str, message: String) -> Result<()> {
+        // XXX strip leading #
+        if let Some(target) = self.inner.read().await.targets.get(name) {
+            target.handle_message(message).await
+        } else {
+            Err(Error::msg(format!("No such target {}", name)))
+        }
     }
     // XXX promote/demote chans on join/leave events:
     // 1 -> 2 active, check for name/rename query

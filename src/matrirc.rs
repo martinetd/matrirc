@@ -7,13 +7,12 @@ use crate::matrix::room_mappings::Mappings;
 use crate::{ircd, ircd::IrcClient};
 
 /// client state struct
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Matrirc {
     /// wrap in Arc for clone
     inner: Arc<MatrircInner>,
 }
 
-#[derive(Debug)]
 struct MatrircInner {
     matrix: Client,
     irc: IrcClient,

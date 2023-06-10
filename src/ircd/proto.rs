@@ -3,7 +3,7 @@ use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, TryStreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::IrcCodec;
-use log::{info, trace};
+use log::{info, trace, warn};
 use std::cmp::min;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -126,14 +126,24 @@ pub async fn ircd_sync_read(
 ) -> Result<()> {
     while let Some(message) = reader.try_next().await? {
         trace!("Got message {}", message);
-        match message.command {
+        match message.command.clone() {
             Command::PING(server, server2) => matrirc.irc().send(pong(server, server2)).await?,
             Command::PRIVMSG(target, msg) => {
                 // parrot for now, send to matrix next
-                matrirc
-                    .irc()
-                    .send_privmsg(target, &matrirc.irc().nick, msg)
-                    .await?
+                if let Err(e) = matrirc.mappings().to_matrix(&target, msg).await {
+                    warn!("Could not forward message: {}", e);
+                    if let Err(e2) = matrirc
+                        .irc()
+                        .send(notice(
+                            &matrirc.irc().nick,
+                            message.response_target().unwrap_or("matrirc"),
+                            format!("Could not forward: {}", e),
+                        ))
+                        .await
+                    {
+                        warn!("Furthermore, reply errored too: {}", e2);
+                    }
+                }
             }
             _ => info!("Unhandled message {}", message),
         }
