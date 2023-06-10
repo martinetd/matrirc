@@ -19,6 +19,10 @@ async fn on_room_message(
     room: Room,
     matrirc: Ctx<Matrirc>,
 ) -> Result<()> {
+    // ignore events from our own client (transaction set)
+    if event.unsigned.transaction_id.is_some() {
+        return Ok(());
+    };
     // ignore non-joined rooms
     let Room::Joined(_) = room else { return Ok(()) };
 
