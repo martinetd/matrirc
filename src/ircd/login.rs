@@ -26,6 +26,7 @@ pub async fn auth_loop(
                 client_user = Some(user);
                 break;
             }
+            Command::PING(server, server2) => stream.send(proto::pong(server, server2)).await?,
             Command::CAP(_, _, Some(code), _) => {
                 // required for recent-ish versions of irssi
                 if code == "302" {
@@ -69,6 +70,7 @@ async fn matrix_login_loop(
     while let Some(event) = stream.try_next().await? {
         trace!("matrix connection loop: got {:?}", event);
         match event.command {
+            Command::PING(server, server2) => stream.send(proto::pong(server, server2)).await?,
             Command::PRIVMSG(_, body) => {
                 let [homeserver, user, pass] = body.splitn(3, ' ').collect::<Vec<&str>>()[..] else {
                     stream.send(proto::privmsg(
