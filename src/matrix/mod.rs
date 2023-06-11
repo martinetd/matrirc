@@ -1,5 +1,5 @@
 use anyhow::Result;
-use log::info;
+use log::{info, trace};
 use matrix_sdk::{
     config::SyncSettings,
     event_handler::Ctx,
@@ -21,11 +21,16 @@ async fn on_room_message(
 ) -> Result<()> {
     // ignore events from our own client (transaction set)
     if event.unsigned.transaction_id.is_some() {
+        trace!("Ignored message with transaction id (coming from self)");
         return Ok(());
     };
     // ignore non-joined rooms
-    let Room::Joined(_) = room else { return Ok(()) };
+    let Room::Joined(_) = room else {
+        trace!("Ignored message in non-joined room");
+        return Ok(())
+    };
 
+    trace!("Processing event {:?} to room {}", event, room.room_id());
     let target = matrirc.mappings().room_target(&room).await;
 
     match event.content.msgtype {
