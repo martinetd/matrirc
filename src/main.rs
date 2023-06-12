@@ -7,7 +7,8 @@ mod state;
 #[tokio::main]
 async fn main() {
     env_logger::init();
-    args::parse();
+    // ensure args parse early
+    let _ = args::args();
 
     let ircd = ircd::listen().await;
 

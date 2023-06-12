@@ -1,4 +1,5 @@
 use clap::Parser;
+use lazy_static::lazy_static;
 use std::net::SocketAddr;
 
 #[derive(Parser, Debug)]
@@ -14,22 +15,9 @@ pub struct Args {
     pub state_dir: String,
 }
 
-static mut ARGS: Option<Args> = None;
-
-pub fn parse() {
-    let args = Args::parse();
-    // parse is only called once at startup
-    unsafe {
-        ARGS = Some(args);
-    }
-}
-
 pub fn args() -> &'static Args {
-    unsafe {
-        // args is never modified after init
-        if let Some(args) = ARGS.as_ref() {
-            return args;
-        }
+    lazy_static! {
+        static ref ARGS: Args = Args::parse();
     }
-    panic!("args was not initialized?!");
+    &ARGS
 }
