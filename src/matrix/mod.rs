@@ -1,12 +1,15 @@
 use anyhow::Result;
+use chrono::{offset::Local, DateTime};
 use log::{info, trace};
 use matrix_sdk::{
     config::SyncSettings,
     event_handler::Ctx,
     room::Room,
     ruma::events::room::message::{MessageType, OriginalSyncRoomMessageEvent},
+    ruma::MilliSecondsSinceUnixEpoch,
     LoopCtrl,
 };
+use std::time::SystemTime;
 
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
@@ -33,6 +36,22 @@ async fn on_room_message(
     trace!("Processing event {:?} to room {}", event, room.room_id());
     let target = matrirc.mappings().room_target(&room).await;
 
+    let time_prefix = if MilliSecondsSinceUnixEpoch::now()
+        .as_secs()
+        .checked_sub(10u8.into())
+        .unwrap_or(0u8.into())
+        > event.origin_server_ts.as_secs()
+    {
+        let datetime: DateTime<Local> = event
+            .origin_server_ts
+            .to_system_time()
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+            .into();
+        datetime.format("<%Y-%m-%d %H:%M:%S> ").to_string()
+    } else {
+        "".to_string()
+    };
+
     match event.content.msgtype {
         MessageType::Text(text_content) => {
             target
@@ -40,7 +59,7 @@ async fn on_room_message(
                     matrirc.irc(),
                     IrcMessageType::PRIVMSG,
                     &event.sender,
-                    text_content.body,
+                    time_prefix + &text_content.body,
                 )
                 .await?;
         }
