@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
-use crate::matrirc::Matrirc;
+use crate::{matrirc::Matrirc, matrix::proto::MatrixMessageType};
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
 /// so these types wrap it around a bit
@@ -129,8 +129,36 @@ pub async fn ircd_sync_read(
         match message.command.clone() {
             Command::PING(server, server2) => matrirc.irc().send(pong(server, server2)).await?,
             Command::PRIVMSG(target, msg) => {
-                // parrot for now, send to matrix next
-                if let Err(e) = matrirc.mappings().to_matrix(&target, msg).await {
+                let (message_type, msg) = if msg.starts_with("\u{001}ACTION ") {
+                    (MatrixMessageType::Emote, msg[8..].to_string())
+                } else {
+                    (MatrixMessageType::Text, msg)
+                };
+                if let Err(e) = matrirc
+                    .mappings()
+                    .to_matrix(&target, message_type, msg)
+                    .await
+                {
+                    warn!("Could not forward message: {}", e);
+                    if let Err(e2) = matrirc
+                        .irc()
+                        .send(notice(
+                            &matrirc.irc().nick,
+                            message.response_target().unwrap_or("matrirc"),
+                            format!("Could not forward: {}", e),
+                        ))
+                        .await
+                    {
+                        warn!("Furthermore, reply errored too: {}", e2);
+                    }
+                }
+            }
+            Command::NOTICE(target, msg) => {
+                if let Err(e) = matrirc
+                    .mappings()
+                    .to_matrix(&target, MatrixMessageType::Notice, msg)
+                    .await
+                {
                     warn!("Could not forward message: {}", e);
                     if let Err(e2) = matrirc
                         .irc()

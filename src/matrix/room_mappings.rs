@@ -5,7 +5,6 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use matrix_sdk::{
     room::{Room, RoomMember},
-    ruma::events::room::message::RoomMessageEventContent,
     ruma::{OwnedRoomId, OwnedUserId, UserId},
     RoomMemberships,
 };
@@ -18,9 +17,12 @@ use std::collections::{
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::ircd::{
-    proto::{IrcMessage, IrcMessageType},
-    IrcClient,
+use crate::{
+    ircd::{
+        proto::{IrcMessage, IrcMessageType},
+        IrcClient,
+    },
+    matrix::proto::MatrixMessageType,
 };
 
 #[derive(Debug, Clone)]
@@ -101,6 +103,11 @@ struct MappingsInner {
     targets: HashMap<String, Box<dyn MessageHandler + Send + Sync>>,
 }
 
+#[async_trait]
+pub trait MessageHandler {
+    async fn handle_message(&self, message_type: MatrixMessageType, message: String) -> Result<()>;
+}
+
 fn sanitize<'a, S: Into<String>>(str: S) -> String {
     // replace with rust 1.70 OnceCell? eventually
     lazy_static! {
@@ -128,27 +135,6 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
             }
             count += 1;
             key = format!("{}_{}", orig_key, count);
-        }
-    }
-}
-
-#[async_trait]
-trait MessageHandler {
-    async fn handle_message(&self, message: String) -> Result<()>;
-}
-
-#[async_trait]
-impl MessageHandler for Room {
-    async fn handle_message(&self, message: String) -> Result<()> {
-        if let Room::Joined(joined) = self {
-            let content = RoomMessageEventContent::text_plain(message);
-            joined.send(content, None).await?;
-            Ok(())
-        } else {
-            Err(Error::msg(format!(
-                "Room {} was not joined",
-                self.room_id()
-            )))
         }
     }
 }
@@ -349,10 +335,15 @@ impl Mappings {
         drop(target_lock);
         Ok(target)
     }
-    pub async fn to_matrix(&self, name: &str, message: String) -> Result<()> {
+    pub async fn to_matrix(
+        &self,
+        name: &str,
+        message_type: MatrixMessageType,
+        message: String,
+    ) -> Result<()> {
         // XXX strip leading #
         if let Some(target) = self.inner.read().await.targets.get(name) {
-            target.handle_message(message).await
+            target.handle_message(message_type, message).await
         } else {
             Err(Error::msg(format!("No such target {}", name)))
         }
