@@ -15,6 +15,7 @@ use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
 
 pub mod login;
+pub mod proto;
 pub mod room_mappings;
 
 async fn on_room_message(
@@ -60,6 +61,26 @@ async fn on_room_message(
                     IrcMessageType::PRIVMSG,
                     &event.sender,
                     time_prefix + &text_content.body,
+                )
+                .await?;
+        }
+        MessageType::Emote(emote_content) => {
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::PRIVMSG,
+                    &event.sender,
+                    format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
+                )
+                .await?;
+        }
+        MessageType::Notice(notice_content) => {
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::NOTICE,
+                    &event.sender,
+                    time_prefix + &notice_content.body,
                 )
                 .await?;
         }
