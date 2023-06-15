@@ -149,10 +149,21 @@ async fn on_room_message(
                 )
                 .await?;
         }
+        MessageType::_Custom(custom_content) => {
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Privmsg,
+                    &event.sender,
+                    format!("{}Sent {:?}", time_prefix, custom_content),
+                )
+                .await?;
+        }
         MessageType::VerificationRequest(verif_content) => {
             info!("Initiating verif content {:?}", verif_content);
         }
         _ => {
+            info!("Unhandled message: {:?}", event);
             target
                 .send_to_irc(
                     matrirc.irc(),
