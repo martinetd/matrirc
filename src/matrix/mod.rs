@@ -98,7 +98,7 @@ async fn on_room_message(
         MessageType::File(file_content) => {
             let url = file_content
                 .source
-                .to_uri(matrirc.matrix())
+                .to_uri(matrirc.matrix(), &file_content.body)
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             target
@@ -116,7 +116,7 @@ async fn on_room_message(
         MessageType::Image(image_content) => {
             let url = image_content
                 .source
-                .to_uri(matrirc.matrix())
+                .to_uri(matrirc.matrix(), &image_content.body)
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             target
@@ -134,7 +134,7 @@ async fn on_room_message(
         MessageType::Video(video_content) => {
             let url = video_content
                 .source
-                .to_uri(matrirc.matrix())
+                .to_uri(matrirc.matrix(), &video_content.body)
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             target

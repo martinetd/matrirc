@@ -13,6 +13,12 @@ pub struct Args {
 
     #[arg(long, default_value = "/var/lib/matrirc")]
     pub state_dir: String,
+
+    #[arg(long, default_value = None)]
+    pub media_dir: Option<String>,
+
+    #[arg(long, default_value = None)]
+    pub media_url: Option<String>,
 }
 
 pub fn args() -> &'static Args {
