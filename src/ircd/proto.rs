@@ -15,8 +15,8 @@ use crate::{matrirc::Matrirc, matrix::proto::MatrixMessageType};
 /// so these types wrap it around a bit
 #[derive(Debug, Clone)]
 pub enum IrcMessageType {
-    PRIVMSG,
-    NOTICE,
+    Privmsg,
+    Notice,
 }
 #[derive(Debug, Clone)]
 pub struct IrcMessage {
@@ -34,13 +34,13 @@ pub struct IrcMessage {
 impl From<IrcMessage> for Message {
     fn from(message: IrcMessage) -> Self {
         match message.message_type {
-            IrcMessageType::PRIVMSG => privmsg(message.from, message.target, message.message),
-            IrcMessageType::NOTICE => notice(message.from, message.target, message.message),
+            IrcMessageType::Privmsg => privmsg(message.from, message.target, message.message),
+            IrcMessageType::Notice => notice(message.from, message.target, message.message),
         }
     }
 }
 
-fn message_of<'a, S>(prefix: S, command: Command) -> Message
+fn message_of<S>(prefix: S, command: Command) -> Message
 where
     S: Into<String>,
 {
@@ -66,7 +66,7 @@ fn message_of_noprefix(command: Command) -> Message {
 }
 
 /// msg to client as is without any formatting
-pub fn raw_msg<'a, S: Into<String>>(msg: S) -> Message {
+pub fn raw_msg<S: Into<String>>(msg: S) -> Message {
     message_of_noprefix(Command::Raw(msg.into(), vec![]))
 }
 
@@ -76,7 +76,7 @@ pub fn pong(server: String, server2: Option<String>) -> Message {
 
 /// privmsg to target, coming as from, with given content.
 /// target should be user's nick for private messages or channel name
-pub fn privmsg<'a, S, T, U>(from: S, target: T, msg: U) -> Message
+pub fn privmsg<S, T, U>(from: S, target: T, msg: U) -> Message
 where
     S: Into<String>,
     T: Into<String>,
@@ -85,7 +85,7 @@ where
     message_of(from, Command::PRIVMSG(target.into(), msg.into()))
 }
 
-pub fn notice<'a, S, T, U>(from: S, target: T, msg: U) -> Message
+pub fn notice<S, T, U>(from: S, target: T, msg: U) -> Message
 where
     S: Into<String>,
     T: Into<String>,
@@ -94,7 +94,7 @@ where
     message_of(from, Command::NOTICE(target.into(), msg.into()))
 }
 
-pub fn error<'a, S>(reason: S) -> Message
+pub fn error<S>(reason: S) -> Message
 where
     S: Into<String>,
 {
@@ -129,8 +129,8 @@ pub async fn ircd_sync_read(
         match message.command.clone() {
             Command::PING(server, server2) => matrirc.irc().send(pong(server, server2)).await?,
             Command::PRIVMSG(target, msg) => {
-                let (message_type, msg) = if msg.starts_with("\u{001}ACTION ") {
-                    (MatrixMessageType::Emote, msg[8..].to_string())
+                let (message_type, msg) = if let Some(emote) = msg.strip_prefix("\u{001}ACTION ") {
+                    (MatrixMessageType::Emote, emote.to_string())
                 } else {
                     (MatrixMessageType::Text, msg)
                 };

@@ -108,7 +108,7 @@ pub trait MessageHandler {
     async fn handle_message(&self, message_type: MatrixMessageType, message: String) -> Result<()>;
 }
 
-fn sanitize<'a, S: Into<String>>(str: S) -> String {
+fn sanitize<S: Into<String>>(str: S) -> String {
     // replace with rust 1.70 OnceCell? eventually
     lazy_static! {
         static ref SANITIZE: Regex = Regex::new("[^a-zA-Z_-]+").unwrap();
@@ -125,13 +125,10 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
         let mut key = orig_key.clone();
         let mut count = 1;
         loop {
-            match self.entry(key) {
-                Entry::Vacant(entry) => {
-                    let found = entry.key().clone();
-                    entry.insert(value);
-                    return found;
-                }
-                _ => {}
+            if let Entry::Vacant(entry) = self.entry(key) {
+                let found = entry.key().clone();
+                entry.insert(value);
+                return found;
             }
             count += 1;
             key = format!("{}_{}", orig_key, count);
@@ -171,7 +168,7 @@ impl TargetMessage {
 }
 
 impl RoomTarget {
-    fn new<'a, S: Into<String>>(target_type: RoomTargetType, target: S) -> Self {
+    fn new<S: Into<String>>(target_type: RoomTargetType, target: S) -> Self {
         RoomTarget {
             inner: Arc::new(RwLock::new(RoomTargetInner {
                 target: sanitize(target),
@@ -182,10 +179,10 @@ impl RoomTarget {
             })),
         }
     }
-    fn query<'a, S: Into<String>>(target: S) -> Self {
+    fn query<S: Into<String>>(target: S) -> Self {
         RoomTarget::new(RoomTargetType::Query, target)
     }
-    fn chan<'a, S: Into<String>>(chan_name: S) -> Self {
+    fn chan<S: Into<String>>(chan_name: S) -> Self {
         // XXX create as LeftChan on join on first message
         RoomTarget::new(RoomTargetType::Chan, chan_name)
     }
@@ -212,7 +209,7 @@ impl RoomTarget {
             .write()
             .await
             .push_back(TargetMessage {
-                message_type: IrcMessageType::NOTICE,
+                message_type: IrcMessageType::Notice,
                 from: "matrirc".to_string(),
                 message: error,
             });

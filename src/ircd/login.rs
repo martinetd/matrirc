@@ -76,7 +76,7 @@ async fn matrix_login_loop(
                     stream.send(proto::privmsg(
                         "matrirc",
                         nick,
-                        format!("Message not in <homeserver> <user> <pass> format, ignoring."),
+                        "Message not in <homeserver> <user> <pass> format, ignoring.".to_string(),
                     ))
                     .await?;
                     continue;
@@ -91,8 +91,8 @@ async fn matrix_login_loop(
                 match matrix::login::login(homeserver, user, pass, nick, irc_pass).await {
                     Ok(client) => {
                         state::create_user(
-                            &nick,
-                            &irc_pass,
+                            nick,
+                            irc_pass,
                             state::Session {
                                 homeserver: homeserver.into(),
                                 matrix_session: client

@@ -58,7 +58,7 @@ async fn on_room_message(
             target
                 .send_to_irc(
                     matrirc.irc(),
-                    IrcMessageType::PRIVMSG,
+                    IrcMessageType::Privmsg,
                     &event.sender,
                     time_prefix + &text_content.body,
                 )
@@ -68,7 +68,7 @@ async fn on_room_message(
             target
                 .send_to_irc(
                     matrirc.irc(),
-                    IrcMessageType::PRIVMSG,
+                    IrcMessageType::Privmsg,
                     &event.sender,
                     format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
                 )
@@ -78,7 +78,7 @@ async fn on_room_message(
             target
                 .send_to_irc(
                     matrirc.irc(),
-                    IrcMessageType::NOTICE,
+                    IrcMessageType::Notice,
                     &event.sender,
                     time_prefix + &notice_content.body,
                 )
