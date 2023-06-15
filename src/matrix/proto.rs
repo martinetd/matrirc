@@ -47,11 +47,11 @@ impl MessageHandler for Room {
 
 #[async_trait]
 pub trait SourceUri {
-    async fn to_uri(&self, client: &Client, body: &String) -> Result<String>;
+    async fn to_uri(&self, client: &Client, body: &str) -> Result<String>;
 }
 #[async_trait]
 impl SourceUri for MediaSource {
-    async fn to_uri(&self, client: &Client, body: &String) -> Result<String> {
+    async fn to_uri(&self, client: &Client, body: &str) -> Result<String> {
         match self {
             MediaSource::Plain(uri) => {
                 let homeserver = client.homeserver().await;
