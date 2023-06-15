@@ -2,7 +2,11 @@ use anyhow::{Error, Result};
 use async_trait::async_trait;
 use matrix_sdk::{
     room::Room,
-    ruma::events::room::message::{MessageType, RoomMessageEventContent},
+    ruma::events::room::{
+        message::{MessageType, RoomMessageEventContent},
+        MediaSource,
+    },
+    Client,
 };
 use serde_json::map::Map;
 
@@ -32,6 +36,26 @@ impl MessageHandler for Room {
                 "Room {} was not joined",
                 self.room_id()
             )))
+        }
+    }
+}
+
+#[async_trait]
+pub trait SourceUri {
+    async fn to_uri(&self, client: &Client) -> Result<String>;
+}
+#[async_trait]
+impl SourceUri for MediaSource {
+    async fn to_uri(&self, client: &Client) -> Result<String> {
+        match self {
+            MediaSource::Plain(uri) => {
+                let homeserver = client.homeserver().await;
+                Ok(uri.as_str().replace(
+                    "mxc://",
+                    &format!("{}/_matrix/media/r0/download/", homeserver.as_str()),
+                ))
+            }
+            MediaSource::Encrypted(_enc) => Err(Error::msg("<encrypted>")),
         }
     }
 }

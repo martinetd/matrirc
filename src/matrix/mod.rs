@@ -13,6 +13,7 @@ use std::time::SystemTime;
 
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
+use crate::matrix::proto::SourceUri;
 
 pub mod login;
 pub mod proto;
@@ -84,7 +85,83 @@ async fn on_room_message(
                 )
                 .await?;
         }
-        _ => info!("Ignored event {:?}", event),
+        MessageType::ServerNotice(snotice_content) => {
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Notice,
+                    &event.sender,
+                    time_prefix + &snotice_content.body,
+                )
+                .await?;
+        }
+        MessageType::File(file_content) => {
+            let url = file_content
+                .source
+                .to_uri(matrirc.matrix())
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Notice,
+                    &event.sender,
+                    format!(
+                        "{}Sent a file, {}: {}",
+                        time_prefix, &file_content.body, url
+                    ),
+                )
+                .await?;
+        }
+        MessageType::Image(image_content) => {
+            let url = image_content
+                .source
+                .to_uri(matrirc.matrix())
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Notice,
+                    &event.sender,
+                    format!(
+                        "{}Sent a image, {}: {}",
+                        time_prefix, &image_content.body, url
+                    ),
+                )
+                .await?;
+        }
+        MessageType::Video(video_content) => {
+            let url = video_content
+                .source
+                .to_uri(matrirc.matrix())
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Notice,
+                    &event.sender,
+                    format!(
+                        "{}Sent a video, {}: {}",
+                        time_prefix, &video_content.body, url
+                    ),
+                )
+                .await?;
+        }
+        MessageType::VerificationRequest(verif_content) => {
+            info!("Initiating verif content {:?}", verif_content);
+        }
+        _ => {
+            target
+                .send_to_irc(
+                    matrirc.irc(),
+                    IrcMessageType::Notice,
+                    &event.sender,
+                    format!("{}<Unhandled message, check another client>", time_prefix),
+                )
+                .await?;
+        }
     }
     Ok(())
 }
