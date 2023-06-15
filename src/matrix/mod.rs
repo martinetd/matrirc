@@ -54,7 +54,7 @@ async fn on_room_message(
         "".to_string()
     };
 
-    match event.content.msgtype {
+    match &event.content.msgtype {
         MessageType::Text(text_content) => {
             target
                 .send_to_irc(
@@ -149,27 +149,28 @@ async fn on_room_message(
                 )
                 .await?;
         }
-        MessageType::_Custom(custom_content) => {
+        MessageType::VerificationRequest(verif_content) => {
+            info!("Initiating verif content {:?}", verif_content);
+        }
+        msg => {
+            info!("Unhandled message: {:?}", event);
+            let data = if !msg.data().is_empty() {
+                " (has data)"
+            } else {
+                ""
+            };
             target
                 .send_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Privmsg,
                     &event.sender,
-                    format!("{}Sent {:?}", time_prefix, custom_content),
-                )
-                .await?;
-        }
-        MessageType::VerificationRequest(verif_content) => {
-            info!("Initiating verif content {:?}", verif_content);
-        }
-        _ => {
-            info!("Unhandled message: {:?}", event);
-            target
-                .send_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender,
-                    format!("{}<Unhandled message, check another client>", time_prefix),
+                    format!(
+                        "{}Sent {}{}: {}",
+                        time_prefix,
+                        msg.msgtype(),
+                        data,
+                        msg.body()
+                    ),
                 )
                 .await?;
         }
