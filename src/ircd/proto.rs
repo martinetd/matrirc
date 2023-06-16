@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
-use crate::{matrirc::Matrirc, matrix::proto::MatrixMessageType};
+use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
 /// so these types wrap it around a bit
@@ -31,20 +31,27 @@ pub struct IrcMessage {
     pub text: String,
 }
 
-impl From<IrcMessage> for Vec<Message> {
-    fn from(message: IrcMessage) -> Self {
+impl IntoIterator for IrcMessage {
+    type Item = Message;
+    // XXX would skip the collect, but cannot return
+    // because lifetime: IrcMessage would need to be IrcMessage<'a> with &'a str
+    // core::iter::Map<core::str::Split<'_, char>, Self::Item>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
         let IrcMessage {
             text,
             message_type,
             from,
             target,
-        } = message;
+        } = self;
         text.split('\n')
             .map(|line| match message_type {
                 IrcMessageType::Privmsg => privmsg(from.clone(), target.clone(), line),
                 IrcMessageType::Notice => notice(from.clone(), target.clone(), line),
             })
-            .collect()
+            .collect::<Vec<Message>>()
+            .into_iter()
     }
 }
 

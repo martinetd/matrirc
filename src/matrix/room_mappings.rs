@@ -1,6 +1,5 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
-use irc::client::prelude::Message;
 use lazy_static::lazy_static;
 use log::{info, trace};
 use matrix_sdk::{
@@ -17,13 +16,16 @@ use std::collections::{
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::{
-    ircd::{
-        proto::{IrcMessage, IrcMessageType},
-        IrcClient,
-    },
-    matrix::proto::MatrixMessageType,
+use crate::ircd::{
+    proto::{IrcMessage, IrcMessageType},
+    IrcClient,
 };
+
+pub enum MatrixMessageType {
+    Text,
+    Emote,
+    Notice,
+}
 
 #[derive(Debug, Clone)]
 struct TargetMessage {
@@ -33,6 +35,16 @@ struct TargetMessage {
     from: String,
     /// actual message
     text: String,
+}
+
+impl TargetMessage {
+    fn new(message_type: IrcMessageType, from: String, text: String) -> Self {
+        TargetMessage {
+            message_type,
+            from,
+            text,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -136,37 +148,6 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
     }
 }
 
-impl TargetMessage {
-    async fn into_irc_message(self, irc: &IrcClient, target: &RoomTarget) -> IrcMessage {
-        match &*target.inner.read().await {
-            RoomTargetInner {
-                target,
-                /* XXX decomment when channels done
-                 * target_type: RoomTargetType::Query, */
-                ..
-            } => IrcMessage {
-                message_type: self.message_type,
-                from: target.clone(),
-                target: irc.nick.clone(),
-                text: if &self.from == target {
-                    self.text
-                } else {
-                    format!("<{}> {}", self.from, self.text)
-                },
-            },
-            /*
-            // only makes sense if it's joined, check and fallback to query?
-            RoomTargetInner { target, .. } => IrcMessage {
-                message_type: self.message_type,
-                from: self.from,
-                target: format!("#{}", target),
-                text: self.text,
-            },
-            */
-        }
-    }
-}
-
 impl RoomTarget {
     fn new<S: Into<String>>(target_type: RoomTargetType, target: S) -> Self {
         RoomTarget {
@@ -208,11 +189,11 @@ impl RoomTarget {
             .pending_messages
             .write()
             .await
-            .push_back(TargetMessage {
-                message_type: IrcMessageType::Notice,
-                from: "matrirc".to_string(),
-                text: error,
-            });
+            .push_back(TargetMessage::new(
+                IrcMessageType::Notice,
+                "matrirc".to_string(),
+                error,
+            ));
         self
     }
 
@@ -226,8 +207,36 @@ impl RoomTarget {
             _ => Ok((RoomTarget::chan(name), members)),
         }
     }
+    async fn target_message_to_irc(&self, irc: &IrcClient, message: TargetMessage) -> IrcMessage {
+        match &*self.inner.read().await {
+            RoomTargetInner {
+                target,
+                /* XXX decomment when channels done
+                 * target_type: RoomTargetType::Query, */
+                ..
+            } => IrcMessage {
+                message_type: message.message_type,
+                from: target.clone(),
+                target: irc.nick.clone(),
+                text: if &message.from == target {
+                    message.text
+                } else {
+                    format!("<{}> {}", message.from, message.text)
+                },
+            },
+            /*
+            // only makes sense if it's joined, check and fallback to query?
+            RoomTargetInner { target, .. } => IrcMessage {
+                message_type: message.message_type,
+                from: message.from,
+                target: format!("#{}", target),
+                text: message.text,
+            },
+            */
+        }
+    }
 
-    pub async fn send_to_irc<'a, S>(
+    pub async fn send_text_to_irc<'a, S>(
         &self,
         irc: &IrcClient,
         message_type: IrcMessageType,
@@ -264,17 +273,14 @@ impl RoomTarget {
         // really send -- start with pending messages if any
         if !inner.pending_messages.read().await.is_empty() {
             while let Some(target_message) = inner.pending_messages.write().await.pop_front() {
-                let irc_messages: Vec<Message> =
-                    target_message.into_irc_message(irc, self).await.into();
-                for irc_message in irc_messages {
+                for irc_message in self.target_message_to_irc(irc, target_message).await {
                     irc.send(irc_message).await?
                 }
             }
         }
 
         drop(inner);
-        let irc_messages: Vec<Message> = message.into_irc_message(irc, self).await.into();
-        for irc_message in irc_messages {
+        for irc_message in self.target_message_to_irc(irc, message).await {
             irc.send(irc_message).await?
         }
         Ok(())
@@ -338,6 +344,7 @@ impl Mappings {
         drop(target_lock);
         Ok(target)
     }
+
     pub async fn to_matrix(
         &self,
         name: &str,
