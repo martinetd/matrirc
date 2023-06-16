@@ -28,15 +28,23 @@ pub struct IrcMessage {
     /// (channel name for chan, None for query: in this case use own nick)
     pub target: String,
     /// message content
-    pub message: String,
+    pub text: String,
 }
 
-impl From<IrcMessage> for Message {
+impl From<IrcMessage> for Vec<Message> {
     fn from(message: IrcMessage) -> Self {
-        match message.message_type {
-            IrcMessageType::Privmsg => privmsg(message.from, message.target, message.message),
-            IrcMessageType::Notice => notice(message.from, message.target, message.message),
-        }
+        let IrcMessage {
+            text,
+            message_type,
+            from,
+            target,
+        } = message;
+        text.split('\n')
+            .map(|line| match message_type {
+                IrcMessageType::Privmsg => privmsg(from.clone(), target.clone(), line),
+                IrcMessageType::Notice => notice(from.clone(), target.clone(), line),
+            })
+            .collect()
     }
 }
 

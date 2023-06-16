@@ -32,7 +32,7 @@ struct TargetMessage {
     /// will be either from in channel, or added as prefix if different from query name
     from: String,
     /// actual message
-    message: String,
+    text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -148,10 +148,10 @@ impl TargetMessage {
                 message_type: self.message_type,
                 from: target.clone(),
                 target: irc.nick.clone(),
-                message: if &self.from == target {
-                    self.message
+                text: if &self.from == target {
+                    self.text
                 } else {
-                    format!("<{}> {}", self.from, self.message)
+                    format!("<{}> {}", self.from, self.text)
                 },
             },
             /*
@@ -160,7 +160,7 @@ impl TargetMessage {
                 message_type: self.message_type,
                 from: self.from,
                 target: format!("#{}", target),
-                message: self.message,
+                text: self.text,
             },
             */
         }
@@ -211,7 +211,7 @@ impl RoomTarget {
             .push_back(TargetMessage {
                 message_type: IrcMessageType::Notice,
                 from: "matrirc".to_string(),
-                message: error,
+                text: error,
             });
         self
     }
@@ -232,7 +232,7 @@ impl RoomTarget {
         irc: &IrcClient,
         message_type: IrcMessageType,
         sender_id: &UserId,
-        message: S,
+        text: S,
     ) -> Result<()>
     where
         S: Into<String> + std::fmt::Display,
@@ -246,7 +246,7 @@ impl RoomTarget {
                 .map(Cow::Borrowed)
                 .unwrap_or_else(|| Cow::Owned(sender_id.to_string()))
                 .to_string(),
-            message: message.into(),
+            text: text.into(),
         };
         match inner.target_type {
             RoomTargetType::LeftChan => {
@@ -264,14 +264,20 @@ impl RoomTarget {
         // really send -- start with pending messages if any
         if !inner.pending_messages.read().await.is_empty() {
             while let Some(target_message) = inner.pending_messages.write().await.pop_front() {
-                let message: Message = target_message.into_irc_message(irc, self).await.into();
-                irc.send(message).await?
+                let irc_messages: Vec<Message> =
+                    target_message.into_irc_message(irc, self).await.into();
+                for irc_message in irc_messages {
+                    irc.send(irc_message).await?
+                }
             }
         }
 
         drop(inner);
-        let irc_message = message.into_irc_message(irc, self).await.into();
-        irc.send(irc_message).await
+        let irc_messages: Vec<Message> = message.into_irc_message(irc, self).await.into();
+        for irc_message in irc_messages {
+            irc.send(irc_message).await?
+        }
+        Ok(())
     }
 }
 
