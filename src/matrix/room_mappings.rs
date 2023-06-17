@@ -295,6 +295,13 @@ impl RoomTarget {
         }
         Ok(())
     }
+    pub async fn send_simple_query<S>(&self, irc: &IrcClient, text: S) -> Result<()>
+    where
+        S: Into<String>,
+    {
+        self.send_text_to_irc(irc, IrcMessageType::Privmsg, &self.target().await, text)
+            .await
+    }
 }
 
 impl Mappings {
@@ -309,6 +316,32 @@ impl Mappings {
             }
         }
     }
+
+    pub async fn insert_deduped<S>(
+        &self,
+        candidate: S,
+        target: &(impl MessageHandler + Send + Sync + Clone + 'static),
+    ) -> RoomTarget
+    where
+        S: Into<String> + std::fmt::Display,
+    {
+        let mut guard = self.inner.write().await;
+        let name = guard
+            .targets
+            .insert_deduped(candidate, Box::new(target.clone()));
+        let room_target = RoomTarget::query(name);
+        target.set_target(room_target.clone()).await;
+        room_target
+    }
+
+    pub async fn remove_target(&self, name: &str) {
+        self.inner.write().await.targets.remove(name);
+    }
+
+    // note this cannot use insert_free_target because we want to keep write lock
+    // long enough to check for deduplicate and it's a bit of a mess; it could be done
+    // with a more generic 'insert_free_target' that takes a couple of callbacks but
+    // it's just not worth it
     async fn try_room_target(&self, room: &Room) -> Result<RoomTarget> {
         // happy case first
         if let Some(target) = self.inner.read().await.rooms.get(room.room_id()) {

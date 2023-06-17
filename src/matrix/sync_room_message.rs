@@ -21,6 +21,7 @@ use tokio::io::AsyncWriteExt;
 use crate::args::args;
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
+use crate::matrix::verification::handle_verification_request;
 
 #[async_trait]
 pub trait SourceUri {
@@ -200,7 +201,22 @@ pub async fn on_room_message(
         }
         MessageType::VerificationRequest(verif_content) => {
             info!("Initiating verif content {:?}", verif_content);
-            // KeyVerificationRequestEventContent { body: "@x:y.z is requesting to verify your key, but your client does not support in-chat key verification.  You will need to use legacy key verification to verify keys.", formatted: None, methods: ["m.sas.v1", "m.qr_code.show.v1", "m.reciprocate.v1"], from_device: "AAAAAAAAAA", to: "@x2:y2.z2" }
+            if let Err(e) =
+                handle_verification_request(&matrirc, &event.sender, &event.event_id).await
+            {
+                warn!("Verif failed: {}", e);
+                target
+                    .send_text_to_irc(
+                        matrirc.irc(),
+                        IrcMessageType::Notice,
+                        &event.sender.into(),
+                        format!(
+                            "{}Sent a verification request, but failed: {}",
+                            time_prefix, e
+                        ),
+                    )
+                    .await?
+            };
         }
         msg => {
             info!("Unhandled message: {:?}", event);

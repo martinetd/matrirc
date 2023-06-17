@@ -7,6 +7,7 @@ pub mod login;
 mod outgoing;
 pub mod room_mappings;
 mod sync_room_message;
+mod verification;
 
 pub use room_mappings::MatrixMessageType;
 
@@ -16,6 +17,7 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
     let client = matrirc.matrix();
     client.add_event_handler_context(matrirc.clone());
     client.add_event_handler(sync_room_message::on_room_message);
+    client.add_event_handler(verification::on_device_key_verification_request);
 
     let loop_matrirc = &matrirc.clone();
     client
