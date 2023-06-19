@@ -129,12 +129,18 @@ fn sanitize<S: Into<String>>(str: S) -> String {
 }
 
 trait InsertDedup<V> {
-    fn insert_deduped(&mut self, orig_key: String, value: V) -> String;
+    fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
+    where
+        S: Into<String> + std::fmt::Display;
 }
 
 impl<V> InsertDedup<V> for HashMap<String, V> {
-    fn insert_deduped(&mut self, orig_key: String, value: V) -> String {
-        let mut key = orig_key.clone();
+    fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
+    where
+        S: Into<String> + std::fmt::Display,
+    {
+        let orig_key = orig_key.into();
+        let mut key: String = orig_key.clone();
         let mut count = 1;
         loop {
             if let Entry::Vacant(entry) = self.entry(key) {
