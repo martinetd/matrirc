@@ -331,7 +331,13 @@ impl Mappings {
             .targets
             .insert_deduped(name, Box::new(room.clone()));
         trace!("Creating room {}", name);
-        let (target, members) = RoomTarget::target_of_room(name.clone(), room).await?;
+        let (target, members) = match RoomTarget::target_of_room(name.clone(), room).await {
+            Err(e) => {
+                mappings.targets.remove(&name);
+                return Err(e);
+            }
+            Ok(tm) => tm,
+        };
         mappings.rooms.insert(room.room_id().into(), target.clone());
 
         // lock target and release mapping lock we no longer need
