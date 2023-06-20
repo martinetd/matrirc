@@ -4,7 +4,7 @@ use lazy_static::lazy_static;
 use log::{info, trace};
 use matrix_sdk::{
     room::{Room, RoomMember},
-    ruma::{OwnedRoomId, OwnedUserId, UserId},
+    ruma::{OwnedRoomId, OwnedUserId},
     RoomMemberships,
 };
 use regex::Regex;
@@ -79,7 +79,7 @@ struct RoomTargetInner {
     /// remember this for each user individually.
     /// In queries case, any non-trivial member is expanded as <nick> at
     /// the start of the message
-    members: HashMap<OwnedUserId, String>,
+    members: HashMap<String, String>,
     /// list of irc names in channel
     /// used to enforce unicity, and perhaps later to convert
     /// `mentions:` to matric mentions
@@ -118,6 +118,7 @@ struct MappingsInner {
 #[async_trait]
 pub trait MessageHandler {
     async fn handle_message(&self, message_type: MatrixMessageType, message: String) -> Result<()>;
+    async fn set_target(&self, target: RoomTarget);
 }
 
 fn sanitize<S: Into<String>>(str: S) -> String {
@@ -158,7 +159,7 @@ impl RoomTarget {
     fn new<S: Into<String>>(target_type: RoomTargetType, target: S) -> Self {
         RoomTarget {
             inner: Arc::new(RwLock::new(RoomTargetInner {
-                target: sanitize(target),
+                target: target.into(),
                 target_type,
                 members: HashMap::new(),
                 names: HashMap::new(),
@@ -172,6 +173,9 @@ impl RoomTarget {
     fn chan<S: Into<String>>(chan_name: S) -> Self {
         // XXX create as LeftChan on join on first message
         RoomTarget::new(RoomTargetType::Chan, chan_name)
+    }
+    pub async fn target(&self) -> String {
+        self.inner.read().await.target.clone()
     }
 
     #[allow(unused)]
@@ -246,20 +250,20 @@ impl RoomTarget {
         &self,
         irc: &IrcClient,
         message_type: IrcMessageType,
-        sender_id: &UserId,
+        sender: &String,
         text: S,
     ) -> Result<()>
     where
-        S: Into<String> + std::fmt::Display,
+        S: Into<String>,
     {
         let inner = self.inner.read().await;
         let message = TargetMessage {
             message_type,
             from: inner
                 .members
-                .get(sender_id)
+                .get(sender)
                 .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(sender_id.to_string()))
+                .unwrap_or_else(|| Cow::Owned(sender.clone()))
                 .to_string(),
             text: text.into(),
         };
@@ -313,10 +317,10 @@ impl Mappings {
 
         // create a new and try to insert it...
         let name = match room.display_name().await {
-            Ok(room_name) => room_name.to_string(),
+            Ok(room_name) => sanitize(room_name.to_string()),
             Err(error) => {
                 info!("Error getting room display name: {}", error);
-                room.room_id().to_string()
+                sanitize(room.room_id())
             }
         };
 
@@ -347,9 +351,7 @@ impl Mappings {
             let name = target_lock
                 .names
                 .insert_deduped(member.name().to_string(), member.user_id().to_owned());
-            target_lock
-                .members
-                .insert(member.user_id().to_owned(), name);
+            target_lock.members.insert(member.user_id().into(), name);
         }
         // XXX: start task to start join process (needs irc...)
         // drop lock explicitly to allow returning target

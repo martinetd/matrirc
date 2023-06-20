@@ -5,7 +5,7 @@ use matrix_sdk::{
     ruma::events::room::message::{MessageType, RoomMessageEventContent},
 };
 
-use crate::matrix::room_mappings::{MatrixMessageType, MessageHandler};
+use crate::matrix::room_mappings::{MatrixMessageType, MessageHandler, RoomTarget};
 
 #[async_trait]
 impl MessageHandler for Room {
@@ -29,4 +29,6 @@ impl MessageHandler for Room {
             )))
         }
     }
+    // can't remove room from irc, we don't want (and can't anyway) keep target in room
+    async fn set_target(&self, _target: RoomTarget) {}
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
 use chrono::{offset::Local, DateTime};
-use log::{info, trace};
+use log::{info, trace, warn};
 use matrix_sdk::{
     event_handler::Ctx,
     media::{MediaFormat, MediaRequest},
@@ -109,7 +109,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Privmsg,
-                    &event.sender,
+                    &event.sender.into(),
                     time_prefix + &text_content.body,
                 )
                 .await?;
@@ -119,7 +119,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Privmsg,
-                    &event.sender,
+                    &event.sender.into(),
                     format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
                 )
                 .await?;
@@ -129,7 +129,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Notice,
-                    &event.sender,
+                    &event.sender.into(),
                     time_prefix + &notice_content.body,
                 )
                 .await?;
@@ -139,7 +139,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Notice,
-                    &event.sender,
+                    &event.sender.into(),
                     time_prefix + &snotice_content.body,
                 )
                 .await?;
@@ -154,7 +154,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Notice,
-                    &event.sender,
+                    &event.sender.into(),
                     format!(
                         "{}Sent a file, {}: {}",
                         time_prefix, &file_content.body, url
@@ -172,7 +172,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Notice,
-                    &event.sender,
+                    &event.sender.into(),
                     format!(
                         "{}Sent a image, {}: {}",
                         time_prefix, &image_content.body, url
@@ -190,7 +190,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Notice,
-                    &event.sender,
+                    &event.sender.into(),
                     format!(
                         "{}Sent a video, {}: {}",
                         time_prefix, &video_content.body, url
@@ -213,7 +213,7 @@ pub async fn on_room_message(
                 .send_text_to_irc(
                     matrirc.irc(),
                     IrcMessageType::Privmsg,
-                    &event.sender,
+                    &event.sender.into(),
                     format!(
                         "{}Sent {}{}: {}",
                         time_prefix,
