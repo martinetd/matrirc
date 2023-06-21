@@ -132,13 +132,13 @@ fn sanitize<S: Into<String>>(str: S) -> String {
 trait InsertDedup<V> {
     fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
     where
-        S: Into<String> + std::fmt::Display;
+        S: Into<String>;
 }
 
 impl<V> InsertDedup<V> for HashMap<String, V> {
     fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
     where
-        S: Into<String> + std::fmt::Display,
+        S: Into<String>,
     {
         let orig_key = orig_key.into();
         let mut key: String = orig_key.clone();
@@ -323,7 +323,7 @@ impl Mappings {
         target: &(impl MessageHandler + Send + Sync + Clone + 'static),
     ) -> RoomTarget
     where
-        S: Into<String> + std::fmt::Display,
+        S: Into<String>,
     {
         let mut guard = self.inner.write().await;
         let name = guard
