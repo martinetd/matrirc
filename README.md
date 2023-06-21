@@ -18,7 +18,7 @@ You'll need to configure cleanup yourself at this point.
 # TODO
 
 Things known not to work, planned:
- - channels (currently emulated in queries), including join/parts
+ - channels join/parts
  - joning all rooms on reconnect (can only respond if there was recent activity right now)
  - reactions
  - redactions
@@ -29,3 +29,6 @@ Things known not to work, planned:
   - initiate joining room from irc (add metacommand through 'matrirc' queries, like verification)
   - mentions (look for @nick in messages -> search nick in room members -> translate to real userId for highlight)
   - mentions, other way around (translate @userId to @nick)
+
+Not planned ever?:
+ - calls/video

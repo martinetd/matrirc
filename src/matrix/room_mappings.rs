@@ -1,9 +1,9 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
-use log::{info, trace};
+use log::{info, trace, warn};
 use matrix_sdk::{
-    room::{Room, RoomMember},
+    room::Room,
     ruma::{OwnedRoomId, OwnedUserId},
     RoomMemberships,
 };
@@ -14,9 +14,10 @@ use std::collections::{
     VecDeque,
 };
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, RwLockWriteGuard};
 
 use crate::ircd::{
+    join_irc_chan,
     proto::{IrcMessage, IrcMessageType},
     IrcClient,
 };
@@ -61,10 +62,8 @@ enum RoomTargetType {
     Chan,
     /// room maps to a chan, but we're not joined: will force join
     /// on next message or user can join if they want
-    #[allow(unused)]
     LeftChan,
     /// Join in progress
-    #[allow(unused)]
     JoiningChan,
 }
 
@@ -155,6 +154,35 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
     }
 }
 
+async fn fill_room_members(
+    mut target_lock: RwLockWriteGuard<'_, RoomTargetInner>,
+    room: Room,
+    name: String,
+) -> Result<()> {
+    let members = room.members(RoomMemberships::ACTIVE).await?;
+    match members.len() {
+        0 => {
+            // XXX remove room from mappings, but this should never happen anyway
+            return Err(Error::msg(format!("Message in empty room {}?", name)));
+        }
+        // promote to chan if other member name isn't room name
+        1 | 2 => {
+            if members.iter().filter(|m| m.name() == name).next().is_none() {
+                target_lock.target_type = RoomTargetType::LeftChan;
+            }
+        }
+        _ => target_lock.target_type = RoomTargetType::LeftChan,
+    }
+    for member in members {
+        // XXX qol improvement: rename own user id to irc.nick
+        let name = target_lock
+            .names
+            .insert_deduped(sanitize(member.name()), member.user_id().to_owned());
+        target_lock.members.insert(member.user_id().into(), name);
+    }
+    Ok(())
+}
+
 impl RoomTarget {
     fn new<S: Into<String>>(target_type: RoomTargetType, target: S) -> Self {
         RoomTarget {
@@ -170,23 +198,56 @@ impl RoomTarget {
     fn query<S: Into<String>>(target: S) -> Self {
         RoomTarget::new(RoomTargetType::Query, target)
     }
-    fn chan<S: Into<String>>(chan_name: S) -> Self {
-        // XXX create as LeftChan on join on first message
-        RoomTarget::new(RoomTargetType::Chan, chan_name)
-    }
     pub async fn target(&self) -> String {
         self.inner.read().await.target.clone()
     }
 
-    #[allow(unused)]
-    async fn join_chan(&self) -> Result<()> {
+    async fn join_chan(&self, irc: &IrcClient) -> Result<()> {
+        let chan = self.target().await;
         let mut lock = self.inner.write().await;
         match &lock.target_type {
-            RoomTargetType::JoiningChan => (),
             RoomTargetType::LeftChan => (),
+            // got raced
+            RoomTargetType::JoiningChan => return Ok(()),
+            RoomTargetType::Chan => return Ok(()),
             _ => return Err(anyhow::Error::msg("invalid room target")),
         };
-        lock.target_type = RoomTargetType::Chan;
+        lock.target_type = RoomTargetType::JoiningChan;
+        drop(lock);
+        let target = self.clone();
+        let irc = irc.clone();
+        tokio::spawn(async move {
+            let names_list = target.names_list().await;
+            if let Err(e) = join_irc_chan(&irc, format!("#{}", chan), names_list).await {
+                warn!("Could not join irc: {e}");
+                // XXX send message to irc through matrirc query
+                return;
+            }
+            if let Err(e) = target.finish_join(&irc).await {
+                warn!("Could not finish join: {e}");
+                // XXX irc message
+                return;
+            }
+        });
+        Ok(())
+    }
+
+    async fn names_list(&self) -> Vec<String> {
+        // need to clone because of lock -- could do better?
+        self.inner
+            .read()
+            .await
+            .names
+            .keys()
+            .map(|u| u.clone())
+            .collect()
+    }
+
+    async fn finish_join(&self, irc: &IrcClient) -> Result<()> {
+        self.flush_pending_messages(irc).await?;
+        self.inner.write().await.target_type = RoomTargetType::Chan;
+        // recheck in case some new message was stashed before we got write lock
+        self.flush_pending_messages(irc).await?;
         Ok(())
     }
 
@@ -207,22 +268,11 @@ impl RoomTarget {
         self
     }
 
-    async fn target_of_room(name: String, room: &Room) -> Result<(Self, Vec<RoomMember>)> {
-        // XXX we don't want this to be long: figure out active_members_count
-        // https://github.com/matrix-org/matrix-rust-sdk/issues/2010
-        let members = room.members(RoomMemberships::ACTIVE).await?;
-        match members.len() {
-            0 => Err(Error::msg(format!("Message in empty room {}?", name))),
-            1 | 2 => Ok((RoomTarget::query(name), members)),
-            _ => Ok((RoomTarget::chan(name), members)),
-        }
-    }
     async fn target_message_to_irc(&self, irc: &IrcClient, message: TargetMessage) -> IrcMessage {
         match &*self.inner.read().await {
             RoomTargetInner {
                 target,
-                /* XXX decomment when channels done
-                 * target_type: RoomTargetType::Query, */
+                target_type: RoomTargetType::Query,
                 ..
             } => IrcMessage {
                 message_type: message.message_type,
@@ -234,16 +284,27 @@ impl RoomTarget {
                     format!("<{}> {}", message.from, message.text)
                 },
             },
-            /*
-            // only makes sense if it's joined, check and fallback to query?
+            // mostly normal chan, but finish_join can also use ths on JoningChan
+            // we could error on LeftChan but what's the point?
             RoomTargetInner { target, .. } => IrcMessage {
                 message_type: message.message_type,
                 from: message.from,
                 target: format!("#{}", target),
                 text: message.text,
             },
-            */
         }
+    }
+
+    pub async fn flush_pending_messages(&self, irc: &IrcClient) -> Result<()> {
+        let inner = self.inner.read().await;
+        if !inner.pending_messages.read().await.is_empty() {
+            while let Some(target_message) = inner.pending_messages.write().await.pop_front() {
+                for irc_message in self.target_message_to_irc(irc, target_message).await {
+                    irc.send(irc_message).await?
+                }
+            }
+        };
+        Ok(())
     }
 
     pub async fn send_text_to_irc<'a, S>(
@@ -269,27 +330,24 @@ impl RoomTarget {
         };
         match inner.target_type {
             RoomTargetType::LeftChan => {
+                trace!("Queueing message and joining chan");
                 inner.pending_messages.write().await.push_back(message);
-                // XXX start join
+                drop(inner);
+                self.join_chan(irc).await?;
                 return Ok(());
             }
             RoomTargetType::JoiningChan => {
+                trace!("Queueing message (join in progress)");
                 inner.pending_messages.write().await.push_back(message);
                 return Ok(());
             }
             _ => (),
         }
+        drop(inner);
 
         // really send -- start with pending messages if any
-        if !inner.pending_messages.read().await.is_empty() {
-            while let Some(target_message) = inner.pending_messages.write().await.pop_front() {
-                for irc_message in self.target_message_to_irc(irc, target_message).await {
-                    irc.send(irc_message).await?
-                }
-            }
-        }
+        self.flush_pending_messages(irc).await?;
 
-        drop(inner);
         for irc_message in self.target_message_to_irc(irc, message).await {
             irc.send(irc_message).await?
         }
@@ -368,27 +426,20 @@ impl Mappings {
             .targets
             .insert_deduped(name, Box::new(room.clone()));
         trace!("Creating room {}", name);
-        let (target, members) = match RoomTarget::target_of_room(name.clone(), room).await {
-            Err(e) => {
-                mappings.targets.remove(&name);
-                return Err(e);
-            }
-            Ok(tm) => tm,
-        };
+        // create a query anyway, we'll promote it when we get members
+        let target = RoomTarget::query(&name);
         mappings.rooms.insert(room.room_id().into(), target.clone());
 
         // lock target and release mapping lock we no longer need
-        let mut target_lock = target.inner.write().await;
+        let target_lock = target.inner.write().await;
         drop(mappings);
-        for member in members {
-            let name = target_lock
-                .names
-                .insert_deduped(member.name().to_string(), member.user_id().to_owned());
-            target_lock.members.insert(member.user_id().into(), name);
-        }
-        // XXX: start task to start join process (needs irc...)
-        // drop lock explicitly to allow returning target
-        drop(target_lock);
+
+        let room_clone = room.clone();
+        // XXX do this in a tokio::spawn task:
+        // can't seem to pass target_lock as its lifetime depends on target (or
+        // its clone), but we can't pass target and target lock because target can't be used while
+        // target_lock is alive...
+        fill_room_members(target_lock, room_clone, name.clone()).await?;
         Ok(target)
     }
 
@@ -398,7 +449,10 @@ impl Mappings {
         message_type: MatrixMessageType,
         message: String,
     ) -> Result<()> {
-        // XXX strip leading #
+        let name = match name.strip_prefix("#") {
+            Some(suffix) => suffix,
+            None => name,
+        };
         if let Some(target) = self.inner.read().await.targets.get(name) {
             target.handle_message(message_type, message).await
         } else {

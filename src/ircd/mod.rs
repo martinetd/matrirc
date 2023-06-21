@@ -12,10 +12,12 @@ use crate::args::args;
 use crate::matrirc::Matrirc;
 use crate::matrix;
 
+mod chan;
 mod client;
 mod login;
 pub mod proto;
 
+pub use chan::join_irc_chan;
 pub use client::IrcClient;
 
 pub async fn listen() -> tokio::task::JoinHandle<()> {

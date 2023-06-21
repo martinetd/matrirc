@@ -85,6 +85,10 @@ pub fn raw_msg<S: Into<String>>(msg: S) -> Message {
     message_of_noprefix(Command::Raw(msg.into(), vec![]))
 }
 
+pub fn join<S: Into<String>>(chan: S) -> Message {
+    message_of_noprefix(Command::JOIN(chan.into(), None, None))
+}
+
 pub fn pong(server: String, server2: Option<String>) -> Message {
     message_of_noprefix(Command::PONG(server, server2))
 }

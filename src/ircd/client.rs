@@ -1,15 +1,16 @@
 use anyhow::Result;
 use irc::client::prelude::Message;
+use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::ircd::proto;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IrcClient {
     /// Avoid waiting on network: queue messages for another task
     /// to actually do the sending.
     /// read in one place and kept private
-    pub sink: Mutex<mpsc::Sender<Message>>,
+    pub sink: Arc<Mutex<mpsc::Sender<Message>>>,
     pub nick: String,
     pub user: String,
 }
@@ -17,7 +18,7 @@ pub struct IrcClient {
 impl IrcClient {
     pub fn new(sink: mpsc::Sender<Message>, nick: String, user: String) -> IrcClient {
         IrcClient {
-            sink: Mutex::new(sink),
+            sink: Arc::new(Mutex::new(sink)),
             nick,
             user,
         }
