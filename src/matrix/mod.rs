@@ -1,7 +1,8 @@
 use anyhow::Result;
+use log::warn;
 use matrix_sdk::{config::SyncSettings, LoopCtrl};
 
-use crate::matrirc::Matrirc;
+use crate::matrirc::{Matrirc, Running};
 
 pub mod login;
 mod outgoing;
@@ -22,10 +23,18 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
     let loop_matrirc = &matrirc.clone();
     client
         .sync_with_result_callback(sync_settings, |_| async move {
-            if loop_matrirc.running().await {
-                Ok(LoopCtrl::Continue)
-            } else {
-                Ok(LoopCtrl::Break)
+            match loop_matrirc.running().await {
+                Running::First => {
+                    if let Err(e) = loop_matrirc.mappings().sync_rooms(&loop_matrirc).await {
+                        warn!("Got an error syncing rooms on first loop: {}", e);
+                        // XXX send to irc
+                        Ok(LoopCtrl::Break)
+                    } else {
+                        Ok(LoopCtrl::Continue)
+                    }
+                }
+                Running::Continue => Ok(LoopCtrl::Continue),
+                Running::Break => Ok(LoopCtrl::Break),
             }
         })
         .await?;

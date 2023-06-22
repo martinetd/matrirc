@@ -17,10 +17,17 @@ struct MatrircInner {
     matrix: Client,
     irc: IrcClient,
     /// stop indicator
-    running: RwLock<bool>,
+    running: RwLock<Running>,
     /// room mappings in both directions
     /// implementation in matrix/room_mappings.rs
     mappings: Mappings,
+}
+
+#[derive(Clone, Copy)]
+pub enum Running {
+    First,
+    Continue,
+    Break,
 }
 
 impl Matrirc {
@@ -29,7 +36,7 @@ impl Matrirc {
             inner: Arc::new(MatrircInner {
                 matrix,
                 irc,
-                running: RwLock::new(true),
+                running: RwLock::new(Running::First),
                 mappings: Mappings::default(),
             }),
         }
@@ -44,13 +51,26 @@ impl Matrirc {
     pub fn mappings(&self) -> &Mappings {
         &self.inner.mappings
     }
-    pub async fn running(&self) -> bool {
-        *self.inner.running.read().await
+    pub async fn running(&self) -> Running {
+        // need let to drop read lock
+        let v = *self.inner.running.read().await;
+        match v {
+            Running::First => {
+                let mut lock = self.inner.running.write().await;
+                match *lock {
+                    Running::First => {
+                        *lock = Running::Continue;
+                        Running::First
+                    }
+                    run => run,
+                }
+            }
+            run => run,
+        }
     }
     pub async fn stop<'a, S: Into<String>>(&self, reason: S) -> Result<()> {
-        *self.inner.running.write().await = false;
-        self.inner
-            .irc
+        *self.inner.running.write().await = Running::Break;
+        self.irc()
             .send(ircd::proto::error(reason))
             .await
             .context("stop quit message")

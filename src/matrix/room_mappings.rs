@@ -21,6 +21,7 @@ use crate::ircd::{
     proto::{IrcMessage, IrcMessageType},
     IrcClient,
 };
+use crate::matrirc::Matrirc;
 
 pub enum MatrixMessageType {
     Text,
@@ -458,6 +459,14 @@ impl Mappings {
         } else {
             Err(Error::msg(format!("No such target {}", name)))
         }
+    }
+
+    pub async fn sync_rooms(&self, matrirc: &Matrirc) -> Result<()> {
+        let client = matrirc.matrix();
+        for joined in client.joined_rooms() {
+            self.try_room_target(&Room::Joined(joined)).await?;
+        }
+        Ok(())
     }
     // XXX promote/demote chans on join/leave events:
     // 1 -> 2 active, check for name/rename query
