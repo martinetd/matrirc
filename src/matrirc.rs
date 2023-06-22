@@ -15,7 +15,6 @@ pub struct Matrirc {
 
 struct MatrircInner {
     matrix: Client,
-    irc: IrcClient,
     /// stop indicator
     running: RwLock<Running>,
     /// room mappings in both directions
@@ -35,15 +34,14 @@ impl Matrirc {
         Matrirc {
             inner: Arc::new(MatrircInner {
                 matrix,
-                irc,
                 running: RwLock::new(Running::First),
-                mappings: Mappings::default(),
+                mappings: Mappings::new(irc),
             }),
         }
     }
 
     pub fn irc(&self) -> &IrcClient {
-        &self.inner.irc
+        &self.mappings().irc
     }
     pub fn matrix(&self) -> &Client {
         &self.inner.matrix

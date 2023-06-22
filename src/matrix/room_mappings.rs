@@ -94,9 +94,10 @@ struct RoomTargetInner {
     pending_messages: RwLock<VecDeque<TargetMessage>>,
 }
 
-#[derive(Default)]
 pub struct Mappings {
     inner: RwLock<MappingsInner>,
+    pub irc: IrcClient,
+    mt: RoomTarget,
 }
 
 #[derive(Default)]
@@ -364,16 +365,30 @@ impl RoomTarget {
 }
 
 impl Mappings {
+    pub fn new(irc: IrcClient) -> Self {
+        Mappings {
+            inner: MappingsInner::default().into(),
+            irc,
+            mt: RoomTarget::query("matrirc"),
+        }
+    }
     pub async fn room_target(&self, room: &Room) -> RoomTarget {
         match self.try_room_target(room).await {
             Ok(target) => target,
             Err(e) => {
-                // return temporary error channel
-                RoomTarget::query("matrirc")
+                // return error into matrirc channel instead
+                self.mt
+                    .clone()
                     .set_error(format!("Could not find or create target: {}", e))
                     .await
             }
         }
+    }
+    pub async fn matrirc_query<S>(&self, message: S) -> Result<()>
+    where
+        S: Into<String>,
+    {
+        self.mt.send_simple_query(&self.irc, message).await
     }
 
     pub async fn insert_deduped<S>(
@@ -466,6 +481,7 @@ impl Mappings {
         for joined in client.joined_rooms() {
             self.try_room_target(&Room::Joined(joined)).await?;
         }
+        self.matrirc_query("Finished initial room sync").await?;
         Ok(())
     }
     // XXX promote/demote chans on join/leave events:
