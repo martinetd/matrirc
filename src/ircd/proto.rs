@@ -2,7 +2,7 @@ use anyhow::Result;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
-use irc::proto::IrcCodec;
+use irc::proto::{ChannelMode, IrcCodec, Mode};
 use log::{info, trace, warn};
 use std::cmp::min;
 use tokio::net::TcpStream;
@@ -199,11 +199,26 @@ pub async fn ircd_sync_read(
                     }
                 }
             }
-            Command::ChannelMODE(chan, _) => {
+            Command::ChannelMODE(chan, modes) if modes.is_empty() => {
                 if let Err(e) = matrirc
                     .irc()
                     .send(raw_msg(format!(
                         ":matrirc 329 {} {}",
+                        matrirc.irc().nick,
+                        chan
+                    )))
+                    .await
+                {
+                    warn!("Could not reply to mode: {:?}", e)
+                }
+            }
+            Command::ChannelMODE(chan, modes)
+                if modes.contains(&Mode::NoPrefix(ChannelMode::Ban)) =>
+            {
+                if let Err(e) = matrirc
+                    .irc()
+                    .send(raw_msg(format!(
+                        ":matrirc 368 {} {} :End",
                         matrirc.irc().nick,
                         chan
                     )))
