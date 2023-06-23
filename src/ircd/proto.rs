@@ -1,6 +1,6 @@
 use anyhow::Result;
 use futures::stream::{SplitSink, SplitStream};
-use futures::{SinkExt, TryStreamExt};
+use futures::{SinkExt, StreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::IrcCodec;
 use log::{info, trace, warn};
@@ -143,7 +143,14 @@ pub async fn ircd_sync_read(
     mut reader: SplitStream<Framed<TcpStream, IrcCodec>>,
     matrirc: Matrirc,
 ) -> Result<()> {
-    while let Some(message) = reader.try_next().await? {
+    while let Some(input) = reader.next().await {
+        let message = match input {
+            Err(e) => {
+                info!("Ignoring error message {:?}", e);
+                continue;
+            }
+            Ok(m) => m,
+        };
         trace!("Got message {}", message);
         match message.command.clone() {
             Command::PING(server, server2) => matrirc.irc().send(pong(server, server2)).await?,
