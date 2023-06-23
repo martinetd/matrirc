@@ -199,6 +199,32 @@ pub async fn ircd_sync_read(
                     }
                 }
             }
+            Command::ChannelMODE(chan, _) => {
+                if let Err(e) = matrirc
+                    .irc()
+                    .send(raw_msg(format!(
+                        ":matrirc 329 {} {}",
+                        matrirc.irc().nick,
+                        chan
+                    )))
+                    .await
+                {
+                    warn!("Could not reply to mode: {:?}", e)
+                }
+            }
+            Command::WHO(Some(chan), _) => {
+                if let Err(e) = matrirc
+                    .irc()
+                    .send(raw_msg(format!(
+                        ":matrirc 315 {} {} :End",
+                        matrirc.irc().nick,
+                        chan
+                    )))
+                    .await
+                {
+                    warn!("Could not reply to mode: {:?}", e)
+                }
+            }
             _ => info!("Unhandled message {:?}", message),
         }
     }
