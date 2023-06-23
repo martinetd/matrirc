@@ -68,7 +68,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     let writer_matrirc = matrirc.clone();
     tokio::spawn(async move {
         if let Err(e) = proto::ircd_sync_write(writer, irc_sink_rx).await {
-            info!("irc write task failed: {}", e);
+            info!("irc write task failed: {:?}", e);
         } else {
             info!("irc write task done");
         }
@@ -78,7 +78,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     let matrix_matrirc = matrirc.clone();
     tokio::spawn(async move {
         if let Err(e) = matrix::matrix_sync(matrix_matrirc.clone()).await {
-            info!("Error in matrix_sync: {}", e);
+            info!("Error in matrix_sync: {:?}", e);
         } else {
             info!("Stopped matrix sync task");
         }
@@ -91,7 +91,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
         .await?;
     if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {
-        info!("irc read task failed: {}", e);
+        info!("irc read task failed: {:?}", e);
     }
     matrirc.stop("Reached end of handle_client").await?;
     Ok(())

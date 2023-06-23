@@ -158,7 +158,7 @@ pub async fn ircd_sync_read(
                     .to_matrix(&target, message_type, msg)
                     .await
                 {
-                    warn!("Could not forward message: {}", e);
+                    warn!("Could not forward message: {:?}", e);
                     if let Err(e2) = matrirc
                         .irc()
                         .send(notice(
@@ -168,7 +168,7 @@ pub async fn ircd_sync_read(
                         ))
                         .await
                     {
-                        warn!("Furthermore, reply errored too: {}", e2);
+                        warn!("Furthermore, reply errored too: {:?}", e2);
                     }
                 }
             }
@@ -178,7 +178,7 @@ pub async fn ircd_sync_read(
                     .to_matrix(&target, MatrixMessageType::Notice, msg)
                     .await
                 {
-                    warn!("Could not forward message: {}", e);
+                    warn!("Could not forward message: {:?}", e);
                     if let Err(e2) = matrirc
                         .irc()
                         .send(notice(
@@ -188,11 +188,11 @@ pub async fn ircd_sync_read(
                         ))
                         .await
                     {
-                        warn!("Furthermore, reply errored too: {}", e2);
+                        warn!("Furthermore, reply errored too: {:?}", e2);
                     }
                 }
             }
-            _ => info!("Unhandled message {}", message),
+            _ => info!("Unhandled message {:?}", message),
         }
     }
     info!("Stopping read task to stream closed");
