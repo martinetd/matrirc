@@ -131,18 +131,12 @@ fn sanitize<S: Into<String>>(str: S) -> String {
 }
 
 trait InsertDedup<V> {
-    fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
-    where
-        S: Into<String>;
+    fn insert_deduped(&mut self, orig_key: &str, value: V) -> String;
 }
 
 impl<V> InsertDedup<V> for HashMap<String, V> {
-    fn insert_deduped<S>(&mut self, orig_key: S, value: V) -> String
-    where
-        S: Into<String>,
-    {
-        let orig_key = orig_key.into();
-        let mut key: String = orig_key.clone();
+    fn insert_deduped(&mut self, orig_key: &str, value: V) -> String {
+        let mut key: String = orig_key.to_string();
         let mut count = 1;
         loop {
             if let Entry::Vacant(entry) = self.entry(key) {
@@ -159,17 +153,22 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
 async fn fill_room_members(
     mut target_lock: RwLockWriteGuard<'_, RoomTargetInner>,
     room: Room,
-    name: String,
+    room_name: String,
 ) -> Result<()> {
     let members = room.members(RoomMemberships::ACTIVE).await?;
     match members.len() {
         0 => {
             // XXX remove room from mappings, but this should never happen anyway
-            return Err(Error::msg(format!("Message in empty room {}?", name)));
+            return Err(Error::msg(format!("Message in empty room {}?", room_name)));
         }
         // promote to chan if other member name isn't room name
         1 | 2 => {
-            if members.iter().filter(|m| m.name() == name).next().is_none() {
+            if members
+                .iter()
+                .filter(|m| m.name() == room_name)
+                .next()
+                .is_none()
+            {
                 target_lock.target_type = RoomTargetType::LeftChan;
             }
         }
@@ -179,7 +178,7 @@ async fn fill_room_members(
         // XXX qol improvement: rename own user id to irc.nick
         let name = target_lock
             .names
-            .insert_deduped(sanitize(member.name()), member.user_id().to_owned());
+            .insert_deduped(&sanitize(member.name()), member.user_id().to_owned());
         target_lock.members.insert(member.user_id().into(), name);
     }
     Ok(())
@@ -391,14 +390,11 @@ impl Mappings {
         self.mt.send_simple_query(&self.irc, message).await
     }
 
-    pub async fn insert_deduped<S>(
+    pub async fn insert_deduped(
         &self,
-        candidate: S,
+        candidate: &str,
         target: &(impl MessageHandler + Send + Sync + Clone + 'static),
-    ) -> RoomTarget
-    where
-        S: Into<String>,
-    {
+    ) -> RoomTarget {
         let mut guard = self.inner.write().await;
         let name = guard
             .targets
@@ -423,7 +419,7 @@ impl Mappings {
         }
 
         // create a new and try to insert it...
-        let name = match room.display_name().await {
+        let desired_name = match room.display_name().await {
             Ok(room_name) => sanitize(room_name.to_string()),
             Err(error) => {
                 info!("Error getting room display name: {}", error);
@@ -440,7 +436,7 @@ impl Mappings {
         // find unique irc name
         let name = mappings
             .targets
-            .insert_deduped(name, Box::new(room.clone()));
+            .insert_deduped(&desired_name, Box::new(room.clone()));
         trace!("Creating room {}", name);
         // create a query anyway, we'll promote it when we get members
         let target = RoomTarget::query(&name);
@@ -455,7 +451,7 @@ impl Mappings {
         // can't seem to pass target_lock as its lifetime depends on target (or
         // its clone), but we can't pass target and target lock because target can't be used while
         // target_lock is alive...
-        fill_room_members(target_lock, room_clone, name.clone()).await?;
+        fill_room_members(target_lock, room_clone, desired_name).await?;
         Ok(target)
     }
 
