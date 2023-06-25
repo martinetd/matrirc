@@ -1,22 +1,16 @@
 use anyhow::Result;
-use chrono::{offset::Local, DateTime};
 use log::trace;
 use matrix_sdk::{
     event_handler::Ctx,
     room::Room,
     ruma::events::{reaction::OriginalSyncReactionEvent, AnyTimelineEvent},
     ruma::EventId,
-    ruma::MilliSecondsSinceUnixEpoch,
 };
-use std::time::SystemTime;
 
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
+use crate::matrix::time::ToLocal;
 
-fn localtime_from_ts(ts: MilliSecondsSinceUnixEpoch) -> String {
-    let datetime: DateTime<Local> = ts.to_system_time().unwrap_or(SystemTime::UNIX_EPOCH).into();
-    datetime.format("%Y-%m-%d %H:%M:%S").to_string()
-}
 // OriginalRoomRedactionEvent for redactions
 
 async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<String> {
@@ -26,12 +20,16 @@ async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<St
         AnyTimelineEvent::MessageLike(m) => format!(
             "message from {} @ {}",
             m.sender(),
-            localtime_from_ts(m.origin_server_ts()),
+            m.origin_server_ts()
+                .localtime()
+                .unwrap_or_else(|| "just now".to_string()),
         ),
         AnyTimelineEvent::State(s) => format!(
             "not a message from {} @ {}",
             s.sender(),
-            localtime_from_ts(s.origin_server_ts())
+            s.origin_server_ts()
+                .localtime()
+                .unwrap_or_else(|| "just now".to_string()),
         ),
     })
     //match event {
@@ -63,22 +61,11 @@ pub async fn on_sync_reaction(
     trace!("Processing event {:?} to room {}", event, room.room_id());
     let target = matrirc.mappings().room_target(&room).await;
 
-    let time_prefix = if MilliSecondsSinceUnixEpoch::now()
-        .as_secs()
-        .checked_sub(10u8.into())
-        .unwrap_or(0u8.into())
-        > event.origin_server_ts.as_secs()
-    {
-        let datetime: DateTime<Local> = event
-            .origin_server_ts
-            .to_system_time()
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-            .into();
-        datetime.format("<%Y-%m-%d %H:%M:%S> ").to_string()
-    } else {
-        "".to_string()
-    };
-
+    let time_prefix = event
+        .origin_server_ts
+        .localtime()
+        .map(|d| format!("<{}> ", d))
+        .unwrap_or_default();
     let reaction = event.content.relates_to;
     let reaction_text = emoji::lookup_by_glyph::lookup(&reaction.key)
         .map(|e| format!("{} ({})", reaction.key, e.name))

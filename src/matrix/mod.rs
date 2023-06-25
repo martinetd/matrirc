@@ -9,6 +9,7 @@ mod outgoing;
 pub mod room_mappings;
 mod sync_reaction;
 mod sync_room_message;
+pub mod time;
 mod verification;
 
 pub use room_mappings::MatrixMessageType;

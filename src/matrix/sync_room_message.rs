@@ -1,6 +1,5 @@
 use anyhow::{Context, Error, Result};
 use async_trait::async_trait;
-use chrono::{offset::Local, DateTime};
 use log::{info, trace, warn};
 use matrix_sdk::{
     event_handler::Ctx,
@@ -10,17 +9,16 @@ use matrix_sdk::{
         message::{MessageType, OriginalSyncRoomMessageEvent},
         MediaSource,
     },
-    ruma::MilliSecondsSinceUnixEpoch,
     Client,
 };
 use std::path::PathBuf;
-use std::time::SystemTime;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
 use crate::args::args;
 use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
+use crate::matrix::time::ToLocal;
 use crate::matrix::verification::handle_verification_request;
 
 #[async_trait]
@@ -88,21 +86,11 @@ pub async fn on_room_message(
     trace!("Processing event {:?} to room {}", event, room.room_id());
     let target = matrirc.mappings().room_target(&room).await;
 
-    let time_prefix = if MilliSecondsSinceUnixEpoch::now()
-        .as_secs()
-        .checked_sub(10u8.into())
-        .unwrap_or(0u8.into())
-        > event.origin_server_ts.as_secs()
-    {
-        let datetime: DateTime<Local> = event
-            .origin_server_ts
-            .to_system_time()
-            .unwrap_or(SystemTime::UNIX_EPOCH)
-            .into();
-        datetime.format("<%Y-%m-%d %H:%M:%S> ").to_string()
-    } else {
-        "".to_string()
-    };
+    let time_prefix = event
+        .origin_server_ts
+        .localtime()
+        .map(|d| format!("<{}> ", d))
+        .unwrap_or_default();
 
     match &event.content.msgtype {
         MessageType::Text(text_content) => {
