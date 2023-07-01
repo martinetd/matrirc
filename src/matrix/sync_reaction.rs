@@ -43,7 +43,14 @@ pub fn message_like_to_str(event: &AnyMessageLikeEvent) -> String {
         }
     }
 }
-async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<String> {
+async fn get_message_from_event_id(
+    matrirc: &Matrirc,
+    room: &Room,
+    event_id: &EventId,
+) -> Result<String> {
+    if let Some(message) = matrirc.message_get(event_id).await {
+        return Ok(message);
+    };
     let raw_event = room.event(event_id).await?;
 
     Ok(match raw_event.event.deserialize()? {
@@ -114,20 +121,24 @@ pub async fn on_sync_reaction(
     let reaction_text = emoji::lookup_by_glyph::lookup(&reaction.key)
         .map(|e| format!("{} ({})", reaction.key, e.name))
         .unwrap_or(reaction.key.clone());
-    let reacting_to = match get_message_from_event_id(&room, &reaction.event_id).await {
+    let reacting_to = match get_message_from_event_id(&matrirc, &room, &reaction.event_id).await {
         Err(e) => format!("<Could not retreive: {}>", e),
         Ok(m) => m,
     };
+    let message = format!(
+        "{}<Reacted to {}>: {}",
+        time_prefix, reacting_to, reaction_text
+    );
+    matrirc
+        .message_put(event.event_id.clone(), message.clone())
+        .await;
     // get error if any (warn/matrirc channel?)
     target
         .send_text_to_irc(
             matrirc.irc(),
             IrcMessageType::Privmsg,
             &event.sender.into(),
-            format!(
-                "{}<Reacted to {}>: {}",
-                time_prefix, reacting_to, reaction_text
-            ),
+            message,
         )
         .await?;
 
@@ -167,7 +178,7 @@ pub async fn on_sync_room_redaction(
         .as_ref()
         .map(|r| r.as_str())
         .unwrap_or("(no reason)");
-    let reacting_to = match get_message_from_event_id(&room, &event.redacts).await {
+    let reacting_to = match get_message_from_event_id(&matrirc, &room, &event.redacts).await {
         Err(e) => format!("<Could not retreive: {}>", e),
         Ok(m) => m,
     };

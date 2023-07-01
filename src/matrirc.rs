@@ -1,5 +1,9 @@
 use anyhow::{Context, Result};
-use matrix_sdk::Client;
+use lru::LruCache;
+use matrix_sdk::{
+    ruma::{EventId, OwnedEventId},
+    Client,
+};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -20,6 +24,8 @@ struct MatrircInner {
     /// room mappings in both directions
     /// implementation in matrix/room_mappings.rs
     mappings: Mappings,
+    /// recent messages (for reactions, redactions)
+    recent_messages: RwLock<LruCache<OwnedEventId, String>>,
 }
 
 #[derive(Clone, Copy)]
@@ -36,6 +42,9 @@ impl Matrirc {
                 matrix,
                 running: RwLock::new(Running::First),
                 mappings: Mappings::new(irc),
+                recent_messages: RwLock::new(LruCache::new(
+                    std::num::NonZeroUsize::new(1000).unwrap(),
+                )),
             }),
         }
     }
@@ -72,5 +81,11 @@ impl Matrirc {
             .send(ircd::proto::error(reason))
             .await
             .context("stop quit message")
+    }
+    pub async fn message_get(&self, id: &EventId) -> Option<String> {
+        self.inner.recent_messages.read().await.peek(id).cloned()
+    }
+    pub async fn message_put(&self, id: OwnedEventId, message: String) {
+        let _ = self.inner.recent_messages.write().await.put(id, message);
     }
 }

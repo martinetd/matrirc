@@ -194,6 +194,9 @@ pub async fn on_room_message(
     let target = matrirc.mappings().room_target(&room).await;
 
     let (message, message_type) = process_message_like_to_str(&event, &matrirc).await;
+    matrirc
+        .message_put(event.event_id.clone(), message.clone())
+        .await;
 
     target
         .send_text_to_irc(matrirc.irc(), message_type, &event.sender.into(), message)

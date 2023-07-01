@@ -1638,6 +1638,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lru"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "718e8fae447df0c7e1ba7f5189829e63fd536945c8988d61444c19039f16b670"
+dependencies = [
+ "hashbrown 0.13.2",
+]
+
+[[package]]
 name = "maplit"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1661,6 +1670,7 @@ dependencies = [
  "irc",
  "lazy_static",
  "log",
+ "lru",
  "matrix-sdk",
  "rand_core 0.6.4",
  "regex",
