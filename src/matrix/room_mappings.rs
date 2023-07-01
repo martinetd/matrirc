@@ -176,9 +176,14 @@ async fn fill_room_members(
     }
     for member in members {
         // XXX qol improvement: rename own user id to irc.nick
+        // ensure we preseve room target's name to simplify member's nick in queries
+        let member_name = match member.name() {
+            n if n == room_name => target_lock.target.clone(),
+            n => sanitize(n),
+        };
         let name = target_lock
             .names
-            .insert_deduped(&sanitize(member.name()), member.user_id().to_owned());
+            .insert_deduped(&member_name, member.user_id().to_owned());
         target_lock.members.insert(member.user_id().into(), name);
     }
     Ok(())
