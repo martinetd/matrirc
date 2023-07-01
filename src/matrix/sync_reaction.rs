@@ -3,7 +3,10 @@ use log::trace;
 use matrix_sdk::{
     event_handler::Ctx,
     room::Room,
-    ruma::events::{reaction::OriginalSyncReactionEvent, AnyTimelineEvent},
+    ruma::events::{
+        reaction::OriginalSyncReactionEvent, room::message::MessageType, AnyMessageLikeEvent,
+        AnyTimelineEvent, MessageLikeEvent,
+    },
     ruma::EventId,
 };
 
@@ -12,18 +15,48 @@ use crate::matrirc::Matrirc;
 use crate::matrix::time::ToLocal;
 
 // OriginalRoomRedactionEvent for redactions
+pub fn message_like_to_str(event: &AnyMessageLikeEvent) -> String {
+    let AnyMessageLikeEvent::RoomMessage(event) = event else {
+        return "(not a message)".to_string()
+    };
+    let MessageLikeEvent::Original(event) = event else {
+        return "(redacted)".to_string()
+    };
 
+    match &event.content.msgtype {
+        MessageType::Text(text_content) => text_content.body.clone(),
+        MessageType::Emote(emote_content) => format!("emote: {}", emote_content.body),
+        MessageType::Notice(notice_content) => notice_content.body.clone(),
+        MessageType::ServerNotice(snotice_content) => snotice_content.body.clone(),
+        MessageType::File(file_content) => format!("file: {}", &file_content.body),
+        MessageType::Image(image_content) => format!("image: {}", &image_content.body,),
+        MessageType::Video(video_content) => format!("video: {}", &video_content.body,),
+        MessageType::VerificationRequest(_verif_content) => "(verification request)".to_string(),
+        msg => {
+            let data = if !msg.data().is_empty() {
+                " (has data)"
+            } else {
+                ""
+            };
+            format!("{}{}: {}", msg.msgtype(), data, msg.body())
+        }
+    }
+}
 async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<String> {
     let raw_event = room.event(event_id).await?;
 
     Ok(match raw_event.event.deserialize()? {
-        AnyTimelineEvent::MessageLike(m) => format!(
-            "message from {} @ {}",
-            m.sender(),
-            m.origin_server_ts()
-                .localtime()
-                .unwrap_or_else(|| "just now".to_string()),
-        ),
+        AnyTimelineEvent::MessageLike(m) => {
+            let message = message_like_to_str(&m);
+            format!(
+                "message from {} @ {}: {}",
+                m.sender(),
+                m.origin_server_ts()
+                    .localtime()
+                    .unwrap_or_else(|| "just now".to_string()),
+                message
+            )
+        }
         AnyTimelineEvent::State(s) => format!(
             "not a message from {} @ {}",
             s.sender(),
@@ -58,7 +91,11 @@ pub async fn on_sync_reaction(
         return Ok(())
     };
 
-    trace!("Processing event {:?} to room {}", event, room.room_id());
+    trace!(
+        "Processing reaction event {:?} to room {}",
+        event,
+        room.room_id()
+    );
     let target = matrirc.mappings().room_target(&room).await;
 
     let time_prefix = event
