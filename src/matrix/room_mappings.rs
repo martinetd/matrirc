@@ -1,7 +1,7 @@
 use anyhow::{Error, Result};
 use async_trait::async_trait;
 use lazy_static::lazy_static;
-use log::{info, trace, warn};
+use log::{trace, warn};
 use matrix_sdk::{
     room::Room,
     ruma::{OwnedRoomId, OwnedUserId},
@@ -128,6 +128,16 @@ fn sanitize<S: Into<String>>(str: S) -> String {
         static ref SANITIZE: Regex = Regex::new("[^a-zA-Z_-]+").unwrap();
     }
     SANITIZE.replace_all(&str.into(), "").into()
+}
+
+pub async fn room_name(room: &matrix_sdk::BaseRoom) -> String {
+    if let Ok(name) = room.display_name().await {
+        return name.to_string();
+    }
+    if let Some(name) = room.name() {
+        return name.to_string();
+    }
+    room.room_id().to_string()
 }
 
 trait InsertDedup<V> {
@@ -424,13 +434,7 @@ impl Mappings {
         }
 
         // create a new and try to insert it...
-        let desired_name = match room.display_name().await {
-            Ok(room_name) => sanitize(room_name.to_string()),
-            Err(error) => {
-                info!("Error getting room display name: {}", error);
-                sanitize(room.room_id())
-            }
-        };
+        let desired_name = sanitize(&room_name(room).await);
 
         // lock mappings and insert into hashs
         let mut mappings = self.inner.write().await;

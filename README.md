@@ -19,10 +19,6 @@ You'll need to configure cleanup yourself at this point.
 
 Things known not to work, planned:
  - channels join/parts
- - joning all rooms on reconnect (can only respond if there was recent activity right now)
- - reactions
- - redactions
- - room invitations
  - notification on topic/icon change
 
  Not planned short term, but would accept PR:
