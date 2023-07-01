@@ -4,8 +4,9 @@ use matrix_sdk::{
     event_handler::Ctx,
     room::Room,
     ruma::events::{
-        reaction::OriginalSyncReactionEvent, room::message::MessageType, AnyMessageLikeEvent,
-        AnyTimelineEvent, MessageLikeEvent,
+        reaction::OriginalSyncReactionEvent, room::message::MessageType,
+        room::redaction::OriginalSyncRoomRedactionEvent, AnyMessageLikeEvent, AnyTimelineEvent,
+        MessageLikeEvent,
     },
     ruma::EventId,
 };
@@ -47,6 +48,8 @@ async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<St
 
     Ok(match raw_event.event.deserialize()? {
         AnyTimelineEvent::MessageLike(m) => {
+            trace!("Got related message event: {:?}", m);
+
             let message = message_like_to_str(&m);
             format!(
                 "message from {} @ {}: {}",
@@ -57,13 +60,17 @@ async fn get_message_from_event_id(room: &Room, event_id: &EventId) -> Result<St
                 message
             )
         }
-        AnyTimelineEvent::State(s) => format!(
-            "not a message from {} @ {}",
-            s.sender(),
-            s.origin_server_ts()
-                .localtime()
-                .unwrap_or_else(|| "just now".to_string()),
-        ),
+        AnyTimelineEvent::State(s) => {
+            trace!("Got related state event: {:?}", s);
+
+            format!(
+                "not a message from {} @ {}",
+                s.sender(),
+                s.origin_server_ts()
+                    .localtime()
+                    .unwrap_or_else(|| "just now".to_string()),
+            )
+        }
     })
     //match event {
     // happy path:
@@ -121,6 +128,56 @@ pub async fn on_sync_reaction(
                 "{}<Reacted to {}>: {}",
                 time_prefix, reacting_to, reaction_text
             ),
+        )
+        .await?;
+
+    Ok(())
+}
+pub async fn on_sync_room_redaction(
+    event: OriginalSyncRoomRedactionEvent,
+    room: Room,
+    matrirc: Ctx<Matrirc>,
+) -> Result<()> {
+    // ignore events from our own client (transaction set)
+    if event.unsigned.transaction_id.is_some() {
+        trace!("Ignored reaction with transaction id (coming from self)");
+        return Ok(());
+    };
+    // ignore non-joined rooms
+    let Room::Joined(_) = room else {
+        trace!("Ignored reaction in non-joined room");
+        return Ok(())
+    };
+
+    trace!(
+        "Processing redaction event {:?} to room {}",
+        event,
+        room.room_id()
+    );
+    let target = matrirc.mappings().room_target(&room).await;
+
+    let time_prefix = event
+        .origin_server_ts
+        .localtime()
+        .map(|d| format!("<{}> ", d))
+        .unwrap_or_default();
+    let reason = event
+        .content
+        .reason
+        .as_ref()
+        .map(|r| r.as_str())
+        .unwrap_or("(no reason)");
+    let reacting_to = match get_message_from_event_id(&room, &event.redacts).await {
+        Err(e) => format!("<Could not retreive: {}>", e),
+        Ok(m) => m,
+    };
+    // get error if any (warn/matrirc channel?)
+    target
+        .send_text_to_irc(
+            matrirc.irc(),
+            IrcMessageType::Privmsg,
+            &event.sender.into(),
+            format!("{}<Redacted {}>: {}", time_prefix, reacting_to, reason),
         )
         .await?;
 

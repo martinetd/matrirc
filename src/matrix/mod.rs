@@ -21,6 +21,7 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
     client.add_event_handler_context(matrirc.clone());
     client.add_event_handler(sync_room_message::on_room_message);
     client.add_event_handler(sync_reaction::on_sync_reaction);
+    client.add_event_handler(sync_reaction::on_sync_room_redaction);
     client.add_event_handler(verification::on_device_key_verification_request);
 
     let loop_matrirc = &matrirc.clone();
