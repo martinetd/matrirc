@@ -67,6 +67,113 @@ impl SourceUri for MediaSource {
     }
 }
 
+async fn process_message_like_to_str(
+    event: &OriginalSyncRoomMessageEvent,
+    matrirc: &Matrirc,
+) -> (String, IrcMessageType) {
+    let time_prefix = event
+        .origin_server_ts
+        .localtime()
+        .map(|d| format!("<{}> ", d))
+        .unwrap_or_default();
+
+    match &event.content.msgtype {
+        MessageType::Text(text_content) => {
+            (time_prefix + &text_content.body, IrcMessageType::Privmsg)
+        }
+        MessageType::Emote(emote_content) => (
+            format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
+            IrcMessageType::Privmsg,
+        ),
+        MessageType::Notice(notice_content) => {
+            (time_prefix + &notice_content.body, IrcMessageType::Notice)
+        }
+        MessageType::ServerNotice(snotice_content) => {
+            (time_prefix + &snotice_content.body, IrcMessageType::Notice)
+        }
+        MessageType::File(file_content) => {
+            let url = file_content
+                .source
+                .to_uri(matrirc.matrix(), &file_content.body)
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            (
+                format!(
+                    "{}Sent a file, {}: {}",
+                    time_prefix, &file_content.body, url
+                ),
+                IrcMessageType::Notice,
+            )
+        }
+        MessageType::Image(image_content) => {
+            let url = image_content
+                .source
+                .to_uri(matrirc.matrix(), &image_content.body)
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            (
+                format!(
+                    "{}Sent a image, {}: {}",
+                    time_prefix, &image_content.body, url
+                ),
+                IrcMessageType::Notice,
+            )
+        }
+        MessageType::Video(video_content) => {
+            let url = video_content
+                .source
+                .to_uri(matrirc.matrix(), &video_content.body)
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            (
+                format!(
+                    "{}Sent a video, {}: {}",
+                    time_prefix, &video_content.body, url
+                ),
+                IrcMessageType::Notice,
+            )
+        }
+        MessageType::VerificationRequest(verif_content) => {
+            info!("Initiating verif content {:?}", verif_content);
+            if let Err(e) =
+                handle_verification_request(&matrirc, &event.sender, &event.event_id).await
+            {
+                warn!("Verif failed: {}", e);
+                (
+                    format!(
+                        "{}Sent a verification request, but failed: {}",
+                        time_prefix, e
+                    ),
+                    IrcMessageType::Notice,
+                )
+            } else {
+                (
+                    format!("{}Sent a verification request", time_prefix),
+                    IrcMessageType::Notice,
+                )
+            }
+        }
+        msg => {
+            info!("Unhandled message: {:?}", event);
+            let data = if !msg.data().is_empty() {
+                " (has data)"
+            } else {
+                ""
+            };
+            (
+                format!(
+                    "{}Sent {}{}: {}",
+                    time_prefix,
+                    msg.msgtype(),
+                    data,
+                    msg.body()
+                ),
+                IrcMessageType::Privmsg,
+            )
+        }
+    }
+}
+
 pub async fn on_room_message(
     event: OriginalSyncRoomMessageEvent,
     room: Room,
@@ -86,148 +193,11 @@ pub async fn on_room_message(
     trace!("Processing event {:?} to room {}", event, room.room_id());
     let target = matrirc.mappings().room_target(&room).await;
 
-    let time_prefix = event
-        .origin_server_ts
-        .localtime()
-        .map(|d| format!("<{}> ", d))
-        .unwrap_or_default();
+    let (message, message_type) = process_message_like_to_str(&event, &matrirc).await;
 
-    match &event.content.msgtype {
-        MessageType::Text(text_content) => {
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Privmsg,
-                    &event.sender.into(),
-                    time_prefix + &text_content.body,
-                )
-                .await?;
-        }
-        MessageType::Emote(emote_content) => {
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Privmsg,
-                    &event.sender.into(),
-                    format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
-                )
-                .await?;
-        }
-        MessageType::Notice(notice_content) => {
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender.into(),
-                    time_prefix + &notice_content.body,
-                )
-                .await?;
-        }
-        MessageType::ServerNotice(snotice_content) => {
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender.into(),
-                    time_prefix + &snotice_content.body,
-                )
-                .await?;
-        }
-        MessageType::File(file_content) => {
-            let url = file_content
-                .source
-                .to_uri(matrirc.matrix(), &file_content.body)
-                .await
-                .unwrap_or_else(|e| format!("{}", e));
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender.into(),
-                    format!(
-                        "{}Sent a file, {}: {}",
-                        time_prefix, &file_content.body, url
-                    ),
-                )
-                .await?;
-        }
-        MessageType::Image(image_content) => {
-            let url = image_content
-                .source
-                .to_uri(matrirc.matrix(), &image_content.body)
-                .await
-                .unwrap_or_else(|e| format!("{}", e));
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender.into(),
-                    format!(
-                        "{}Sent a image, {}: {}",
-                        time_prefix, &image_content.body, url
-                    ),
-                )
-                .await?;
-        }
-        MessageType::Video(video_content) => {
-            let url = video_content
-                .source
-                .to_uri(matrirc.matrix(), &video_content.body)
-                .await
-                .unwrap_or_else(|e| format!("{}", e));
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Notice,
-                    &event.sender.into(),
-                    format!(
-                        "{}Sent a video, {}: {}",
-                        time_prefix, &video_content.body, url
-                    ),
-                )
-                .await?;
-        }
-        MessageType::VerificationRequest(verif_content) => {
-            info!("Initiating verif content {:?}", verif_content);
-            if let Err(e) =
-                handle_verification_request(&matrirc, &event.sender, &event.event_id).await
-            {
-                warn!("Verif failed: {}", e);
-                target
-                    .send_text_to_irc(
-                        matrirc.irc(),
-                        IrcMessageType::Notice,
-                        &event.sender.into(),
-                        format!(
-                            "{}Sent a verification request, but failed: {}",
-                            time_prefix, e
-                        ),
-                    )
-                    .await?
-            };
-        }
-        msg => {
-            info!("Unhandled message: {:?}", event);
-            let data = if !msg.data().is_empty() {
-                " (has data)"
-            } else {
-                ""
-            };
-            target
-                .send_text_to_irc(
-                    matrirc.irc(),
-                    IrcMessageType::Privmsg,
-                    &event.sender.into(),
-                    format!(
-                        "{}Sent {}{}: {}",
-                        time_prefix,
-                        msg.msgtype(),
-                        data,
-                        msg.body()
-                    ),
-                )
-                .await?;
-        }
-    }
+    target
+        .send_text_to_irc(matrirc.irc(), message_type, &event.sender.into(), message)
+        .await?;
+
     Ok(())
 }
