@@ -4,7 +4,7 @@ use matrix_sdk::{config::SyncSettings, LoopCtrl};
 
 use crate::matrirc::{Matrirc, Running};
 
-mod join;
+mod invite;
 pub mod login;
 mod outgoing;
 pub mod room_mappings;
@@ -24,7 +24,7 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
     client.add_event_handler(sync_reaction::on_sync_reaction);
     client.add_event_handler(sync_reaction::on_sync_room_redaction);
     client.add_event_handler(verification::on_device_key_verification_request);
-    client.add_event_handler(join::on_stripped_state_member);
+    client.add_event_handler(invite::on_stripped_state_member);
 
     let loop_matrirc = &matrirc.clone();
     client
