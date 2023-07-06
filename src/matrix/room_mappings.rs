@@ -484,6 +484,15 @@ impl Mappings {
     pub async fn sync_rooms(&self, matrirc: &Matrirc) -> Result<()> {
         let client = matrirc.matrix();
         for joined in client.joined_rooms() {
+            if joined.is_tombstoned() {
+                trace!(
+                    "Skipping tombstoned {}",
+                    joined
+                        .name()
+                        .unwrap_or_else(|| joined.room_id().to_string())
+                );
+                continue;
+            }
             self.try_room_target(&Room::Joined(joined)).await?;
         }
         self.matrirc_query("Finished initial room sync").await?;
