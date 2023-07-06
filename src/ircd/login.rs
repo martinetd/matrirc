@@ -48,6 +48,9 @@ pub async fn auth_loop(
             nick
         )))
         .await?;
+    // XXX spawn a task to handle just ping? what about other messages from irc client, queue
+    // somewhere?... note probably not safe to use tokio::select! or similar as
+    // matrix_restore_session or login loop probably aren't cancel-safe
     info!("Processing login from {}!{}", nick, user);
     let client = match state::login(&nick, &pass)? {
         Some(session) => matrix_restore_session(stream, &nick, &pass, session).await?,
