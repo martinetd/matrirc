@@ -16,6 +16,7 @@ use std::collections::{
 use std::sync::Arc;
 use tokio::sync::{RwLock, RwLockWriteGuard};
 
+use crate::ircd;
 use crate::ircd::{
     join_irc_chan,
     proto::{IrcMessage, IrcMessageType},
@@ -218,17 +219,17 @@ impl RoomTarget {
         self.inner.read().await.target.clone()
     }
 
-    async fn join_chan(&self, irc: &IrcClient) -> Result<()> {
-        let chan = self.target().await;
+    async fn join_chan(&self, irc: &IrcClient) -> bool {
         let mut lock = self.inner.write().await;
         match &lock.target_type {
             RoomTargetType::LeftChan => (),
-            // got raced
-            RoomTargetType::JoiningChan => return Ok(()),
-            RoomTargetType::Chan => return Ok(()),
-            _ => return Err(anyhow::Error::msg("invalid room target")),
+            RoomTargetType::Query => (),
+            // got raced or already joined
+            RoomTargetType::JoiningChan => return false,
+            RoomTargetType::Chan => return false,
         };
         lock.target_type = RoomTargetType::JoiningChan;
+        let chan = lock.target.clone();
         drop(lock);
         let target = self.clone();
         let irc = irc.clone();
@@ -245,7 +246,7 @@ impl RoomTarget {
                 return;
             }
         });
-        Ok(())
+        true
     }
 
     async fn names_list(&self) -> Vec<String> {
@@ -264,6 +265,41 @@ impl RoomTarget {
         self.inner.write().await.target_type = RoomTargetType::Chan;
         // recheck in case some new message was stashed before we got write lock
         self.flush_pending_messages(irc).await?;
+        Ok(())
+    }
+
+    pub async fn member_join(
+        &self,
+        irc: &IrcClient,
+        member: OwnedUserId,
+        name: Option<String>,
+    ) -> Result<()> {
+        let mut guard = self.inner.write().await;
+        let chan = format!("#{}", guard.target);
+        trace!("{:?} ({}) joined {}", name, member, chan);
+        // XXX wait a bit and list room members if name is none?
+        let name = sanitize(name.unwrap_or_else(|| member.to_string()));
+        let name = guard.names.insert_deduped(&name, member.clone());
+        guard.members.insert(member.into(), name.clone());
+        drop(guard);
+        if !self.join_chan(irc).await {
+            // already joined chan, send join to irc
+            irc.send(ircd::proto::join(Some(name), chan)).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn member_part(&self, irc: &IrcClient, member: OwnedUserId) -> Result<()> {
+        let mut guard = self.inner.write().await;
+        let Some(name) = guard.members.remove(member.as_str()) else {
+            // not in chan
+            return Ok(())
+        };
+        let chan = format!("#{}", guard.target);
+        trace!("{:?} ({}) part {}", name, member, chan);
+        let _ = guard.names.remove(&name);
+        drop(guard);
+        irc.send(ircd::proto::part(Some(name), chan)).await?;
         Ok(())
     }
 
@@ -349,7 +385,7 @@ impl RoomTarget {
                 trace!("Queueing message and joining chan");
                 inner.pending_messages.write().await.push_back(message);
                 drop(inner);
-                self.join_chan(irc).await?;
+                self.join_chan(irc).await;
                 return Ok(());
             }
             RoomTargetType::JoiningChan => {
@@ -498,10 +534,4 @@ impl Mappings {
         self.matrirc_query("Finished initial room sync").await?;
         Ok(())
     }
-    // XXX promote/demote chans on join/leave events:
-    // 1 -> 2 active, check for name/rename query
-    // 2 -> 3+, convert from query to chan
-    // 3+ -> 3, demote to query?
-    // 2 -> 1, rename to avoid confusion?
-    // XXX update room mappings on join/leave events...
 }

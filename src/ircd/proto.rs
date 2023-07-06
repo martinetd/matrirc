@@ -80,13 +80,35 @@ fn message_of_noprefix(command: Command) -> Message {
     }
 }
 
+fn message_of_option<S>(prefix: Option<S>, command: Command) -> Message
+where
+    S: Into<String>,
+{
+    match prefix {
+        None => message_of_noprefix(command),
+        Some(p) => message_of(p, command),
+    }
+}
+
 /// msg to client as is without any formatting
 pub fn raw_msg<S: Into<String>>(msg: S) -> Message {
     message_of_noprefix(Command::Raw(msg.into(), vec![]))
 }
 
-pub fn join<S: Into<String>>(chan: S) -> Message {
-    message_of_noprefix(Command::JOIN(chan.into(), None, None))
+pub fn join<S, T>(who: Option<S>, chan: T) -> Message
+where
+    S: Into<String>,
+    T: Into<String>,
+{
+    message_of_option(who, Command::JOIN(chan.into(), None, None))
+}
+
+pub fn part<S, T>(who: Option<S>, chan: T) -> Message
+where
+    S: Into<String>,
+    T: Into<String>,
+{
+    message_of_option(who, Command::PART(chan.into(), None))
 }
 
 pub fn pong(server: String, server2: Option<String>) -> Message {
