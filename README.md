@@ -6,6 +6,7 @@ simple ircd bridging to matrix
 
 - e2e encryption
 - client verification
+- properly prompts on room invitations
 - can accept encrypted files to local directory (`--media-dir`) and give links if configured (`--media-url`, prefix up to file name).
 You'll need to configure cleanup yourself at this point.
 
@@ -18,7 +19,6 @@ You'll need to configure cleanup yourself at this point.
 # TODO
 
 Things known not to work, planned:
- - channels join/parts
  - notification on topic/icon change
 
  Not planned short term, but would accept PR:
