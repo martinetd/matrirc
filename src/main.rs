@@ -1,3 +1,6 @@
+// recursion limit can be removed when we bump rustc requirement to 1.70
+#![recursion_limit = "256"]
+
 mod args;
 mod ircd;
 mod matrirc;
