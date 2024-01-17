@@ -18,7 +18,7 @@ use tokio::sync::{RwLock, RwLockWriteGuard};
 
 use crate::ircd;
 use crate::ircd::{
-    join_irc_chan,
+    join_irc_chan, join_irc_chan_finish,
     proto::{IrcMessage, IrcMessageType},
     IrcClient,
 };
@@ -229,13 +229,20 @@ impl RoomTarget {
             RoomTargetType::Chan => return false,
         };
         lock.target_type = RoomTargetType::JoiningChan;
-        let chan = lock.target.clone();
+        let chan = format!("#{}", lock.target);
         drop(lock);
+
+        // we need to initate the join before getting members in another task
+        if let Err(e) = join_irc_chan(&irc, &chan).await {
+            warn!("Could not join irc: {e}");
+            // XXX send message to irc through matrirc query
+            return false;
+        }
         let target = self.clone();
         let irc = irc.clone();
         tokio::spawn(async move {
             let names_list = target.names_list().await;
-            if let Err(e) = join_irc_chan(&irc, format!("#{}", chan), names_list).await {
+            if let Err(e) = join_irc_chan_finish(&irc, chan, names_list).await {
                 warn!("Could not join irc: {e}");
                 // XXX send message to irc through matrirc query
                 return;

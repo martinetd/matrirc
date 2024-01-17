@@ -17,7 +17,7 @@ mod client;
 mod login;
 pub mod proto;
 
-pub use chan::join_irc_chan;
+pub use chan::{join_irc_chan, join_irc_chan_finish};
 pub use client::IrcClient;
 
 pub async fn listen() -> tokio::task::JoinHandle<()> {

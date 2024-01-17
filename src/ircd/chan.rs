@@ -5,8 +5,11 @@ use crate::ircd::{
     IrcClient,
 };
 
-pub async fn join_irc_chan(irc: &IrcClient, chan: String, members: Vec<String>) -> Result<()> {
-    irc.send(join(None::<String>, &chan)).await?;
+pub async fn join_irc_chan(irc: &IrcClient, chan: &str) -> Result<()> {
+    irc.send(join(Some(format!("{}!{}@matrirc", irc.nick, irc.user)), chan)).await
+}
+
+pub async fn join_irc_chan_finish(irc: &IrcClient, chan: String, members: Vec<String>) -> Result<()> {
     let names_list_header = format!(":matrirc 353 {} = {} :", irc.nick, chan);
     let mut names_list = names_list_header.clone();
     for member in members {
