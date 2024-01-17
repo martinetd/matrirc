@@ -5,6 +5,7 @@ use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::{ChannelMode, IrcCodec, Mode};
 use log::{info, trace, warn};
 use std::cmp::min;
+use std::time::SystemTime;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
@@ -225,9 +226,11 @@ pub async fn ircd_sync_read(
                 if let Err(e) = matrirc
                     .irc()
                     .send(raw_msg(format!(
-                        ":matrirc 329 {} {}",
+                        ":matrirc 329 {} {} {}",
                         matrirc.irc().nick,
-                        chan
+                        chan,
+                        // normally chan creation timestamp
+                        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
                     )))
                     .await
                 {
