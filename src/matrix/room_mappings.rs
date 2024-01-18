@@ -300,7 +300,7 @@ impl RoomTarget {
         let mut guard = self.inner.write().await;
         let Some(name) = guard.members.remove(member.as_str()) else {
             // not in chan
-            return Ok(())
+            return Ok(());
         };
         let chan = format!("#{}", guard.target);
         trace!("{:?} ({}) part {}", name, member, chan);

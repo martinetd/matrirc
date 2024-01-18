@@ -230,7 +230,10 @@ pub async fn ircd_sync_read(
                         matrirc.irc().nick,
                         chan,
                         // normally chan creation timestamp
-                        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or_default()
+                        SystemTime::now()
+                            .duration_since(SystemTime::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or_default()
                     )))
                     .await
                 {

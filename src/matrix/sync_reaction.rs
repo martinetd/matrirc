@@ -18,10 +18,10 @@ use crate::matrix::time::ToLocal;
 // OriginalRoomRedactionEvent for redactions
 pub fn message_like_to_str(event: &AnyMessageLikeEvent) -> String {
     let AnyMessageLikeEvent::RoomMessage(event) = event else {
-        return "(not a message)".to_string()
+        return "(not a message)".to_string();
     };
     let MessageLikeEvent::Original(event) = event else {
-        return "(redacted)".to_string()
+        return "(redacted)".to_string();
     };
 
     match &event.content.msgtype {
@@ -102,7 +102,7 @@ pub async fn on_sync_reaction(
     // ignore non-joined rooms
     let Room::Joined(_) = room else {
         trace!("Ignored reaction in non-joined room");
-        return Ok(())
+        return Ok(());
     };
 
     trace!(
@@ -157,7 +157,7 @@ pub async fn on_sync_room_redaction(
     // ignore non-joined rooms
     let Room::Joined(_) = room else {
         trace!("Ignored reaction in non-joined room");
-        return Ok(())
+        return Ok(());
     };
 
     trace!(

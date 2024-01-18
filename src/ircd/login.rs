@@ -38,7 +38,7 @@ pub async fn auth_loop(
     }
 
     let (Some(nick), Some(user), Some(pass)) = (client_nick, client_user, client_pass) else {
-        return Err(Error::msg("nick or pass wasn't set for client!"))
+        return Err(Error::msg("nick or pass wasn't set for client!"));
     };
     // need this to be able to interact with irssi: send welcome before any
     // privmsg exchange even if login isn't over.
@@ -75,13 +75,16 @@ async fn matrix_login_loop(
         match event.command {
             Command::PING(server, server2) => stream.send(proto::pong(server, server2)).await?,
             Command::PRIVMSG(_, body) => {
-                let [homeserver, user, pass] = body.splitn(3, ' ').collect::<Vec<&str>>()[..] else {
-                    stream.send(proto::privmsg(
-                        "matrirc",
-                        nick,
-                        "Message not in <homeserver> <user> <pass> format, ignoring.".to_string(),
-                    ))
-                    .await?;
+                let [homeserver, user, pass] = body.splitn(3, ' ').collect::<Vec<&str>>()[..]
+                else {
+                    stream
+                        .send(proto::privmsg(
+                            "matrirc",
+                            nick,
+                            "Message not in <homeserver> <user> <pass> format, ignoring."
+                                .to_string(),
+                        ))
+                        .await?;
                     continue;
                 };
                 stream

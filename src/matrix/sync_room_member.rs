@@ -22,7 +22,7 @@ pub async fn on_room_member(
     // ignore non-joined rooms
     let Room::Joined(_) = room else {
         trace!("Ignored member event in non-joined room");
-        return Ok(())
+        return Ok(());
     };
 
     trace!("Processing event {:?} to room {}", event, room.room_id());

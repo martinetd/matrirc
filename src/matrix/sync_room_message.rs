@@ -41,7 +41,7 @@ impl SourceUri for MediaSource {
             }
             _ => {
                 let Some(dir_path) = &args().media_dir else {
-                    return Err(Error::msg("<encrypted, no media dir set>"))
+                    return Err(Error::msg("<encrypted, no media dir set>"));
                 };
                 let media_request = MediaRequest {
                     source: self.clone(),
@@ -190,7 +190,7 @@ pub async fn on_room_message(
     // ignore non-joined rooms
     let Room::Joined(_) = room else {
         trace!("Ignored message in non-joined room");
-        return Ok(())
+        return Ok(());
     };
 
     trace!("Processing event {:?} to room {}", event, room.room_id());
