@@ -172,12 +172,7 @@ pub async fn on_sync_room_redaction(
         .localtime()
         .map(|d| format!("<{}> ", d))
         .unwrap_or_default();
-    let reason = event
-        .content
-        .reason
-        .as_ref()
-        .map(|r| r.as_str())
-        .unwrap_or("(no reason)");
+    let reason = event.content.reason.as_deref().unwrap_or("(no reason)");
     let reacting_to = match get_message_from_event_id(&matrirc, &room, &event.redacts).await {
         Err(e) => format!("<Could not retreive: {}>", e),
         Ok(m) => m,

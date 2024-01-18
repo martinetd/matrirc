@@ -33,7 +33,7 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
         .sync_with_result_callback(sync_settings, |_| async move {
             match loop_matrirc.running().await {
                 Running::First => {
-                    if let Err(e) = loop_matrirc.mappings().sync_rooms(&loop_matrirc).await {
+                    if let Err(e) = loop_matrirc.mappings().sync_rooms(loop_matrirc).await {
                         warn!("Got an error syncing rooms on first loop: {}", e);
                         // XXX send to irc
                         Ok(LoopCtrl::Break)

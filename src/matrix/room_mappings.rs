@@ -174,12 +174,7 @@ async fn fill_room_members(
         }
         // promote to chan if other member name isn't room name
         1 | 2 => {
-            if members
-                .iter()
-                .filter(|m| m.name() == room_name)
-                .next()
-                .is_none()
-            {
+            if members.iter().all(|m| m.name() != room_name) {
                 target_lock.target_type = RoomTargetType::LeftChan;
             }
         }
@@ -233,7 +228,7 @@ impl RoomTarget {
         drop(lock);
 
         // we need to initate the join before getting members in another task
-        if let Err(e) = join_irc_chan(&irc, &chan).await {
+        if let Err(e) = join_irc_chan(irc, &chan).await {
             warn!("Could not join irc: {e}");
             // XXX send message to irc through matrirc query
             return false;
@@ -250,7 +245,6 @@ impl RoomTarget {
             if let Err(e) = target.finish_join(&irc).await {
                 warn!("Could not finish join: {e}");
                 // XXX irc message
-                return;
             }
         });
         true
@@ -258,13 +252,7 @@ impl RoomTarget {
 
     async fn names_list(&self) -> Vec<String> {
         // need to clone because of lock -- could do better?
-        self.inner
-            .read()
-            .await
-            .names
-            .keys()
-            .map(|u| u.clone())
-            .collect()
+        self.inner.read().await.names.keys().cloned().collect()
     }
 
     async fn finish_join(&self, irc: &IrcClient) -> Result<()> {
@@ -477,7 +465,7 @@ impl Mappings {
         }
 
         // create a new and try to insert it...
-        let desired_name = sanitize(&room_name(room).await);
+        let desired_name = sanitize(room_name(room).await);
 
         // lock mappings and insert into hashs
         let mut mappings = self.inner.write().await;
@@ -513,7 +501,7 @@ impl Mappings {
         message_type: MatrixMessageType,
         message: String,
     ) -> Result<()> {
-        let name = match name.strip_prefix("#") {
+        let name = match name.strip_prefix('#') {
             Some(suffix) => suffix,
             None => name,
         };

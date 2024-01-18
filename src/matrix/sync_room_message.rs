@@ -139,7 +139,7 @@ async fn process_message_like_to_str(
         MessageType::VerificationRequest(verif_content) => {
             info!("Initiating verif content {:?}", verif_content);
             if let Err(e) =
-                handle_verification_request(&matrirc, &event.sender, &event.event_id).await
+                handle_verification_request(matrirc, &event.sender, &event.event_id).await
             {
                 warn!("Verif failed: {}", e);
                 (

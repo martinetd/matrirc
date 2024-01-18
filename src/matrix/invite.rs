@@ -119,7 +119,6 @@ impl MessageHandler for InvitationContext {
                     }
                     let _ = clone.stop().await;
                 });
-                ()
             }
             "no" => {
                 self.to_irc("Okay").await?;

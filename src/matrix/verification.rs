@@ -224,7 +224,7 @@ impl MessageHandler for VerificationContext {
             VerifState::ConfirmStart => self.handle_confirm_start(message).await,
             VerifState::ConfirmEmoji => self.handle_confirm_emoji(message).await,
             _ => {
-                self.to_irc(format!("not expecting any message at this point"))
+                self.to_irc("not expecting any message at this point".to_string())
                     .await
             }
         }
