@@ -33,7 +33,10 @@ impl SourceUri for MediaSource {
                 let homeserver = client.homeserver().await;
                 Ok(uri.as_str().replace(
                     "mxc://",
-                    &format!("{}/_matrix/media/r0/download/", homeserver.as_str()),
+                    &format!(
+                        "{}/_matrix/media/r0/download/",
+                        homeserver.as_str().trim_end_matches('/')
+                    ),
                 ))
             }
             _ => {
