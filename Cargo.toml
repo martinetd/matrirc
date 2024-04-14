@@ -28,6 +28,7 @@ log = "0.4"
 lru = "0.10.1"
 # matrix-sdk: 0.6.2 is already old, restart from main
 matrix-sdk = { features = ["anyhow"], git = "https://github.com/matrix-org/matrix-rust-sdk", rev = "0b9c082e11955f49f99acd21542f62b40f11c418" }
+percent-encoding = "2.3.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
 regex = "1.8"
 serde = "1.0"

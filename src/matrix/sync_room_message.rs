@@ -11,6 +11,7 @@ use matrix_sdk::{
     },
     Client,
 };
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use std::path::PathBuf;
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -20,6 +21,9 @@ use crate::ircd::proto::IrcMessageType;
 use crate::matrirc::Matrirc;
 use crate::matrix::time::ToLocal;
 use crate::matrix::verification::handle_verification_request;
+
+/// https://url.spec.whatwg.org/#fragment-percent-encode-set
+const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
 
 #[async_trait]
 pub trait SourceUri {
@@ -64,7 +68,11 @@ impl SourceUri for MediaSource {
                 let file = dir.join(filename);
                 fs::File::create(file).await?.write_all(&content).await?;
                 let url = args().media_url.as_ref().unwrap_or(dir_path);
-                Ok(format!("{}/{}", url, filename))
+                Ok(format!(
+                    "{}/{}",
+                    url,
+                    utf8_percent_encode(filename, FRAGMENT)
+                ))
             }
         }
     }
@@ -116,7 +124,7 @@ async fn process_message_like_to_str(
                 .unwrap_or_else(|e| format!("{}", e));
             (
                 format!(
-                    "{}Sent a image, {}: {}",
+                    "{}Sent an image, {}: {}",
                     time_prefix, &image_content.body, url
                 ),
                 IrcMessageType::Notice,
