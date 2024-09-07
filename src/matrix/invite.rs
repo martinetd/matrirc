@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use async_trait::async_trait;
 use log::{trace, warn};
 use matrix_sdk::{
-    event_handler::Ctx, room, room::Room, ruma::events::room::member::StrippedRoomMemberEvent,
+    event_handler::Ctx, room::Room, ruma::events::room::member::StrippedRoomMemberEvent, RoomState,
 };
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,13 +17,13 @@ struct InvitationContext {
 }
 struct InvitationContextInner {
     matrirc: Matrirc,
-    room: room::Invited,
+    room: Room,
     room_name: String,
     target: RwLock<Option<RoomTarget>>,
 }
 
 impl InvitationContext {
-    async fn new(matrirc: Matrirc, room: room::Invited) -> Self {
+    async fn new(matrirc: Matrirc, room: Room) -> Self {
         InvitationContext {
             inner: Arc::new(InvitationContextInner {
                 matrirc,
@@ -84,9 +84,9 @@ impl MessageHandler for InvitationContext {
                         warn!("Couldn't send message: {}", e)
                     }
                     let mut delay = 2;
-                    if let Some(joined) = loop {
-                        match room.accept_invitation().await {
-                            Ok(joined) => break Some(joined),
+                    if loop {
+                        match room.join().await {
+                            Ok(()) => break true,
                             Err(err) => {
                                 // example retries accepting a few times...
                                 if delay > 1800 {
@@ -96,7 +96,7 @@ impl MessageHandler for InvitationContext {
                                             clone.inner.room_name, err
                                         ))
                                         .await;
-                                    break None;
+                                    break false;
                                 }
                                 warn!(
                                     "Invite join room {} failed, retrying in {}: {}",
@@ -108,8 +108,7 @@ impl MessageHandler for InvitationContext {
                         };
                     } {
                         let matrirc = &clone.inner.matrirc;
-                        let new_target =
-                            matrirc.mappings().room_target(&Room::Joined(joined)).await;
+                        let new_target = matrirc.mappings().room_target(&room).await;
                         let _ = new_target
                             .send_simple_query(
                                 matrirc.irc(),
@@ -123,7 +122,7 @@ impl MessageHandler for InvitationContext {
             "no" => {
                 self.to_irc("Okay").await?;
                 // XXX log failure?
-                self.inner.room.reject_invitation().await?;
+                self.inner.room.leave().await?;
                 self.stop().await?;
             }
             _ => {
@@ -153,7 +152,7 @@ pub async fn on_stripped_state_member(
         return Ok(());
     }
     // not an invite
-    let Room::Invited(room) = room else {
+    if room.state() != RoomState::Invited {
         return Ok(());
     };
     let invite = InvitationContext::new(matrirc.clone(), room.clone()).await;

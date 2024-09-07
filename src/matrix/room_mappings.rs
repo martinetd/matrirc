@@ -524,7 +524,7 @@ impl Mappings {
                 );
                 continue;
             }
-            self.try_room_target(&Room::Joined(joined)).await?;
+            self.try_room_target(&joined).await?;
         }
         self.matrirc_query("Finished initial room sync").await?;
         Ok(())

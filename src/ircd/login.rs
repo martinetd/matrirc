@@ -99,12 +99,8 @@ async fn matrix_login_loop(
                         state::create_user(
                             nick,
                             irc_pass,
-                            state::Session {
-                                homeserver: homeserver.into(),
-                                matrix_session: client
-                                    .session()
-                                    .context("client has no session")?,
-                            },
+                            homeserver,
+                            client.session().context("client has no auth session")?,
                         )?;
                         return Ok(client);
                     }

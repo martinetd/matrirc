@@ -4,6 +4,7 @@ use matrix_sdk::{
     event_handler::Ctx,
     room::Room,
     ruma::events::room::member::{MembershipChange, OriginalSyncRoomMemberEvent},
+    RoomState,
 };
 
 use crate::ircd::proto::IrcMessageType;
@@ -20,7 +21,7 @@ pub async fn on_room_member(
         return Ok(());
     };
     // ignore non-joined rooms
-    let Room::Joined(_) = room else {
+    if room.state() != RoomState::Joined {
         trace!("Ignored member event in non-joined room");
         return Ok(());
     };

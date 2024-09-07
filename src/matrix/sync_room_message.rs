@@ -9,7 +9,7 @@ use matrix_sdk::{
         message::{MessageType, OriginalSyncRoomMessageEvent},
         MediaSource,
     },
-    Client,
+    Client, RoomState,
 };
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use std::path::PathBuf;
@@ -34,7 +34,7 @@ impl SourceUri for MediaSource {
     async fn to_uri(&self, client: &Client, body: &str) -> Result<String> {
         match self {
             MediaSource::Plain(uri) => {
-                let homeserver = client.homeserver().await;
+                let homeserver = client.homeserver();
                 Ok(uri.as_str().replace(
                     "mxc://",
                     &format!(
@@ -196,7 +196,7 @@ pub async fn on_room_message(
         return Ok(());
     };
     // ignore non-joined rooms
-    let Room::Joined(_) = room else {
+    if room.state() != RoomState::Joined {
         trace!("Ignored message in non-joined room");
         return Ok(());
     };

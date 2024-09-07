@@ -150,6 +150,9 @@ impl VerificationContext {
                         tokio::spawn(self.clone().sas_verification_handler(s));
                         break;
                     }
+                    _ => {
+                        let _ = self.to_irc("Unsupported non-SasV1 verification").await;
+                    }
                 },
                 VerificationRequestState::Done | VerificationRequestState::Cancelled(_) => break,
             }

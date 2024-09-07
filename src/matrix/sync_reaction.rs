@@ -9,6 +9,7 @@ use matrix_sdk::{
         MessageLikeEvent,
     },
     ruma::EventId,
+    RoomState,
 };
 
 use crate::ircd::proto::IrcMessageType;
@@ -100,7 +101,7 @@ pub async fn on_sync_reaction(
         return Ok(());
     };
     // ignore non-joined rooms
-    let Room::Joined(_) = room else {
+    if room.state() != RoomState::Joined {
         trace!("Ignored reaction in non-joined room");
         return Ok(());
     };
@@ -155,7 +156,7 @@ pub async fn on_sync_room_redaction(
         return Ok(());
     };
     // ignore non-joined rooms
-    let Room::Joined(_) = room else {
+    if room.state() != RoomState::Joined {
         trace!("Ignored reaction in non-joined room");
         return Ok(());
     };
@@ -173,9 +174,14 @@ pub async fn on_sync_room_redaction(
         .map(|d| format!("<{}> ", d))
         .unwrap_or_default();
     let reason = event.content.reason.as_deref().unwrap_or("(no reason)");
-    let reacting_to = match get_message_from_event_id(&matrirc, &room, &event.redacts).await {
-        Err(e) => format!("<Could not retreive: {}>", e),
-        Ok(m) => m,
+    let reacting_to = {
+        match &event.redacts {
+            None => "<Could not retreive: no redacted event id>".to_string(),
+            Some(redacts) => match get_message_from_event_id(&matrirc, &room, redacts).await {
+                Err(e) => format!("<Could not retreive: {}>", e),
+                Ok(m) => m,
+            },
+        }
     };
     // get error if any (warn/matrirc channel?)
     target

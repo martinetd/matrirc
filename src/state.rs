@@ -9,6 +9,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305,
 };
 use log::info;
+use matrix_sdk::AuthSession;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
@@ -22,7 +23,24 @@ use crate::args::args;
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Session {
     pub homeserver: String,
-    pub matrix_session: matrix_sdk::Session,
+    pub matrix_session: SerializedMatrixSession,
+}
+
+/// matrix-rust-sdk's "Session" struct as we used to serialize it
+/// as of matrix-rust-sdk commit 0b9c082e11955f49f99acd21542f62b40f11c418
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SerializedMatrixSession {
+    /// The access token used for this session.
+    pub access_token: String,
+    /// The token used for [refreshing the access token], if any.
+    ///
+    /// [refreshing the access token]: https://spec.matrix.org/v1.3/client-server-api/#refreshing-access-tokens
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<String>,
+    /// The user the access token was issued for.
+    pub user_id: String,
+    /// The ID of the client device.
+    pub device_id: String,
 }
 
 /// data required for decryption
@@ -42,7 +60,7 @@ fn check_pass(session_file: PathBuf, pass: &str) -> Result<Session> {
     let blob = {
         let content = fs::read(session_file).context("Could not read user session file")?;
         serde_json::from_slice::<Blob>(&content)
-            .context("Could not deserialize session file content")?
+            .context("Could not deserialize session file content.")?
     };
     if blob.version != "argon2+chacha20poly1305" {
         return Err(Error::msg(
@@ -56,7 +74,7 @@ fn check_pass(session_file: PathBuf, pass: &str) -> Result<Session> {
     let cipher = XChaCha20Poly1305::new(&key.into());
     let plaintext = cipher
         .decrypt(blob.nonce.as_slice().into(), &*blob.ciphertext)
-        .context("Could not decrypt blob: bad password?")?;
+        .map_err(|_| Error::msg("Could not decrypt blob: bad password?"))?;
 
     let session = serde_json::from_slice::<Session>(&plaintext)
         .context("Could not deserialize stored session")?;
@@ -65,7 +83,22 @@ fn check_pass(session_file: PathBuf, pass: &str) -> Result<Session> {
 }
 
 /// encrypt session and store it
-pub fn create_user(nick: &str, pass: &str, session: Session) -> Result<()> {
+pub fn create_user(
+    nick: &str,
+    pass: &str,
+    homeserver: &str,
+    auth_session: AuthSession,
+) -> Result<()> {
+    let session_meta = auth_session.meta();
+    let session = Session {
+        homeserver: homeserver.into(),
+        matrix_session: SerializedMatrixSession {
+            access_token: auth_session.access_token().into(),
+            refresh_token: auth_session.get_refresh_token().map(str::to_string),
+            user_id: session_meta.user_id.as_str().into(),
+            device_id: session_meta.device_id.as_str().into(),
+        },
+    };
     let mut key = [0u8; 32];
     let mut salt = vec![0u8; 32];
     let mut nonce = vec![0u8; 24];
@@ -81,7 +114,7 @@ pub fn create_user(nick: &str, pass: &str, session: Session) -> Result<()> {
             nonce.as_slice().into(),
             &*serde_json::to_vec(&session).context("could not serialize session")?,
         )
-        .context("Could not encrypt blob")?;
+        .map_err(|_| Error::msg("Could not encrypt blob"))?;
     let blob = Blob {
         version: "argon2+chacha20poly1305".to_string(),
         ciphertext,
