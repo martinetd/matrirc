@@ -21,8 +21,7 @@ clap = { version = "4.3.0", features = ["derive"] }
 emoji = "0.2"
 env_logger = "0.10"
 futures = "0.3"
-# irc: tokio util codec 0.7 support not released
-irc = { version = "0.15", git = "https://github.com/aatxe/irc", rev = "709151b94d9f92a79758e706e6bea219b449e56f" }
+irc = "1.0"
 lazy_static = "1.4"
 log = "0.4"
 lru = "0.10.1"

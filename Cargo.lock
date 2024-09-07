@@ -1563,8 +1563,9 @@ checksum = "8f518f335dce6725a761382244631d86cf0ccb2863413590b31338feb467f9c3"
 
 [[package]]
 name = "irc"
-version = "0.15.0"
-source = "git+https://github.com/aatxe/irc?rev=709151b94d9f92a79758e706e6bea219b449e56f#709151b94d9f92a79758e706e6bea219b449e56f"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b59a23035df48e37386a6d03dc084fbab6ab835134bb99d081954199d7dd20df"
 dependencies = [
  "chrono",
  "encoding",
@@ -1586,8 +1587,9 @@ dependencies = [
 
 [[package]]
 name = "irc-proto"
-version = "0.15.0"
-source = "git+https://github.com/aatxe/irc?rev=709151b94d9f92a79758e706e6bea219b449e56f#709151b94d9f92a79758e706e6bea219b449e56f"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b5c7fb0c03989e8b31de1c91d0f625057887677e387448e7fc10a6afd4d9e1"
 dependencies = [
  "bytes",
  "encoding",
