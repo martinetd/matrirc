@@ -4,10 +4,7 @@ use argon2::{
     Argon2,
 };
 use base64_serde::base64_serde_type;
-use chacha20poly1305::{
-    aead::{Aead, NewAead},
-    XChaCha20Poly1305,
-};
+use chacha20poly1305::{aead::Aead, KeyInit, XChaCha20Poly1305};
 use log::info;
 use matrix_sdk::AuthSession;
 use std::fs;
