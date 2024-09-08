@@ -173,7 +173,7 @@ mod tests {
         let session = AuthSession::Matrix(MatrixSession {
             meta: SessionMeta {
                 user_id: "@test:domain.tld".try_into()?,
-                device_id: "ABCDEFGHIJ".try_into()?,
+                device_id: "ABCDEFGHIJ".into(),
             },
             tokens: MatrixSessionTokens {
                 access_token: "abc_abcdefg_abcdefgh_abcdef".into(),
@@ -184,7 +184,7 @@ mod tests {
         let blob_string = &encrypt_blob("pass", "domain.tld", session)?;
 
         // can decrypt what we just encrypted
-        let session = decrypt_blob("pass", &blob_string)?;
+        let session = decrypt_blob("pass", blob_string)?;
         assert_eq!(session.homeserver, "domain.tld");
         assert_eq!(session.matrix_session.user_id, "@test:domain.tld");
         assert_eq!(session.matrix_session.device_id, "ABCDEFGHIJ");
