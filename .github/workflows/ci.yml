@@ -1,0 +1,17 @@
+on: push
+name: simple CI
+
+env:
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  rust_checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run rustfmt
+        run: cargo fmt
+      - name: Run Clippy
+        run: cargo clippy --all-targets --all-features
+      - name: Run tests
+        run: cargo test
