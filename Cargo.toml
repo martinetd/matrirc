@@ -8,6 +8,7 @@ license = "WTFPLv2"
 keywords = ["irc", "matrix"]
 repository = "https://github.com/martinetd/matrirc"
 readme = "README.md"
+rust-version = "1.75" # MSRV
 
 [dependencies]
 anyhow = "1.0"
