@@ -1,6 +1,3 @@
-// recursion limit can be removed when we bump rustc requirement to 1.70
-#![recursion_limit = "256"]
-
 use anyhow::Result;
 
 mod args;
