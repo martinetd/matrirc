@@ -27,7 +27,7 @@ impl InvitationContext {
         InvitationContext {
             inner: Arc::new(InvitationContextInner {
                 matrirc,
-                room_name: room_name(&room).await,
+                room_name: room_name(&room),
                 room,
                 target: RwLock::new(None),
             }),

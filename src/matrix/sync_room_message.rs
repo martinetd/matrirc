@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use log::{info, trace, warn};
 use matrix_sdk::{
     event_handler::Ctx,
-    media::{MediaFormat, MediaRequest},
+    media::{MediaFormat, MediaRequestParameters},
     room::Room,
     ruma::events::room::{
         message::{MessageType, OriginalSyncRoomMessageEvent},
@@ -47,7 +47,7 @@ impl SourceUri for MediaSource {
                 let Some(dir_path) = &args().media_dir else {
                     return Err(Error::msg("<encrypted, no media dir set>"));
                 };
-                let media_request = MediaRequest {
+                let media_request = MediaRequestParameters {
                     source: self.clone(),
                     format: MediaFormat::File,
                 };
@@ -89,19 +89,22 @@ async fn process_message_like_to_str(
         .unwrap_or_default();
 
     match &event.content.msgtype {
-        MessageType::Text(text_content) => {
-            (time_prefix + &text_content.body, IrcMessageType::Privmsg)
-        }
+        MessageType::Text(text_content) => (
+            time_prefix + text_content.body.as_str(),
+            IrcMessageType::Privmsg,
+        ),
         MessageType::Emote(emote_content) => (
             format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
             IrcMessageType::Privmsg,
         ),
-        MessageType::Notice(notice_content) => {
-            (time_prefix + &notice_content.body, IrcMessageType::Notice)
-        }
-        MessageType::ServerNotice(snotice_content) => {
-            (time_prefix + &snotice_content.body, IrcMessageType::Notice)
-        }
+        MessageType::Notice(notice_content) => (
+            time_prefix + notice_content.body.as_str(),
+            IrcMessageType::Notice,
+        ),
+        MessageType::ServerNotice(snotice_content) => (
+            time_prefix + snotice_content.body.as_str(),
+            IrcMessageType::Notice,
+        ),
         MessageType::File(file_content) => {
             let url = file_content
                 .source
