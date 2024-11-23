@@ -5,8 +5,8 @@ use matrix_sdk::{
     room::Room,
     ruma::events::{
         reaction::OriginalSyncReactionEvent, room::message::MessageType,
-        room::redaction::OriginalSyncRoomRedactionEvent, AnyMessageLikeEvent, AnyTimelineEvent,
-        MessageLikeEvent,
+        room::redaction::OriginalSyncRoomRedactionEvent, AnySyncMessageLikeEvent,
+        AnySyncTimelineEvent, SyncMessageLikeEvent,
     },
     ruma::EventId,
     RoomState,
@@ -17,11 +17,11 @@ use crate::matrirc::Matrirc;
 use crate::matrix::time::ToLocal;
 
 // OriginalRoomRedactionEvent for redactions
-pub fn message_like_to_str(event: &AnyMessageLikeEvent) -> String {
-    let AnyMessageLikeEvent::RoomMessage(event) = event else {
+pub fn message_like_to_str(event: &AnySyncMessageLikeEvent) -> String {
+    let AnySyncMessageLikeEvent::RoomMessage(event) = event else {
         return "(not a message)".to_string();
     };
-    let MessageLikeEvent::Original(event) = event else {
+    let SyncMessageLikeEvent::Original(event) = event else {
         return "(redacted)".to_string();
     };
 
@@ -52,10 +52,10 @@ async fn get_message_from_event_id(
     if let Some(message) = matrirc.message_get(event_id).await {
         return Ok(message);
     };
-    let raw_event = room.event(event_id).await?;
+    let raw_event = room.event(event_id, None).await?;
 
-    Ok(match raw_event.event.deserialize()? {
-        AnyTimelineEvent::MessageLike(m) => {
+    Ok(match raw_event.raw().deserialize()? {
+        AnySyncTimelineEvent::MessageLike(m) => {
             trace!("Got related message event: {:?}", m);
 
             let message = message_like_to_str(&m);
@@ -68,7 +68,7 @@ async fn get_message_from_event_id(
                 message
             )
         }
-        AnyTimelineEvent::State(s) => {
+        AnySyncTimelineEvent::State(s) => {
             trace!("Got related state event: {:?}", s);
 
             format!(

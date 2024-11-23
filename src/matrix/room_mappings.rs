@@ -131,8 +131,8 @@ fn sanitize<S: Into<String>>(str: S) -> String {
     SANITIZE.replace_all(&str.into(), "").into()
 }
 
-pub async fn room_name(room: &matrix_sdk::BaseRoom) -> String {
-    if let Ok(name) = room.display_name().await {
+pub fn room_name(room: &matrix_sdk::BaseRoom) -> String {
+    if let Some(name) = room.cached_display_name() {
         return name.to_string();
     }
     if let Some(name) = room.name() {
@@ -465,7 +465,7 @@ impl Mappings {
         }
 
         // create a new and try to insert it...
-        let desired_name = sanitize(room_name(room).await);
+        let desired_name = sanitize(room_name(room));
 
         // lock mappings and insert into hashs
         let mut mappings = self.inner.write().await;
