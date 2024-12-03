@@ -108,7 +108,7 @@ async fn process_message_like_to_str(
         MessageType::File(file_content) => {
             let url = file_content
                 .source
-                .to_uri(matrirc.matrix(), &file_content.body)
+                .to_uri(matrirc.matrix(), file_content.filename())
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
@@ -122,7 +122,7 @@ async fn process_message_like_to_str(
         MessageType::Image(image_content) => {
             let url = image_content
                 .source
-                .to_uri(matrirc.matrix(), &image_content.body)
+                .to_uri(matrirc.matrix(), image_content.filename())
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
@@ -136,13 +136,27 @@ async fn process_message_like_to_str(
         MessageType::Video(video_content) => {
             let url = video_content
                 .source
-                .to_uri(matrirc.matrix(), &video_content.body)
+                .to_uri(matrirc.matrix(), video_content.filename())
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
                 format!(
                     "{}Sent a video, {}: {}",
                     time_prefix, &video_content.body, url
+                ),
+                IrcMessageType::Notice,
+            )
+        }
+        MessageType::Audio(audio_content) => {
+            let url = audio_content
+                .source
+                .to_uri(matrirc.matrix(), audio_content.filename())
+                .await
+                .unwrap_or_else(|e| format!("{}", e));
+            (
+                format!(
+                    "{}Sent audio, {}: {}",
+                    time_prefix, &audio_content.body, url
                 ),
                 IrcMessageType::Notice,
             )
