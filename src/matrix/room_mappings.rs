@@ -354,7 +354,7 @@ impl RoomTarget {
         Ok(())
     }
 
-    pub async fn send_text_to_irc<'a, S>(
+    pub async fn send_text_to_irc<S>(
         &self,
         irc: &IrcClient,
         message_type: IrcMessageType,

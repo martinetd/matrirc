@@ -75,7 +75,7 @@ impl Matrirc {
             run => run,
         }
     }
-    pub async fn stop<'a, S: Into<String>>(&self, reason: S) -> Result<()> {
+    pub async fn stop<S: Into<String>>(&self, reason: S) -> Result<()> {
         *self.inner.running.write().await = Running::Break;
         self.irc()
             .send(ircd::proto::error(reason))

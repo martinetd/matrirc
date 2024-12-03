@@ -29,7 +29,7 @@ impl IrcClient {
         Ok(())
     }
 
-    pub async fn send_privmsg<'a, S, T, U>(&self, from: S, target: T, msg: U) -> Result<()>
+    pub async fn send_privmsg<S, T, U>(&self, from: S, target: T, msg: U) -> Result<()>
     where
         S: Into<String>,
         T: Into<String>,
