@@ -32,49 +32,35 @@ pub trait SourceUri {
 #[async_trait]
 impl SourceUri for MediaSource {
     async fn to_uri(&self, client: &Client, body: &str) -> Result<String> {
-        match self {
-            MediaSource::Plain(uri) => {
-                let homeserver = client.homeserver();
-                Ok(uri.as_str().replace(
-                    "mxc://",
-                    &format!(
-                        "{}/_matrix/media/r0/download/",
-                        homeserver.as_str().trim_end_matches('/')
-                    ),
-                ))
-            }
-            _ => {
-                let Some(dir_path) = &args().media_dir else {
-                    return Err(Error::msg("<encrypted, no media dir set>"));
-                };
-                let media_request = MediaRequestParameters {
-                    source: self.clone(),
-                    format: MediaFormat::File,
-                };
-                let content = client
-                    .media()
-                    .get_media_content(&media_request, false)
-                    .await
-                    .context("Could not get decrypted data")?;
-                let filename = body.rsplit_once('/').map(|(_, f)| f).unwrap_or(body);
-                let dir = PathBuf::from(dir_path);
-                if !dir.is_dir() {
-                    fs::DirBuilder::new()
-                        .mode(0o700)
-                        .recursive(true)
-                        .create(&dir)
-                        .await?
-                }
-                let file = dir.join(filename);
-                fs::File::create(file).await?.write_all(&content).await?;
-                let url = args().media_url.as_ref().unwrap_or(dir_path);
-                Ok(format!(
-                    "{}/{}",
-                    url,
-                    utf8_percent_encode(filename, FRAGMENT)
-                ))
-            }
+        let Some(dir_path) = &args().media_dir else {
+            return Err(Error::msg("<no media dir set>"));
+        };
+        let media_request = MediaRequestParameters {
+            source: self.clone(),
+            format: MediaFormat::File,
+        };
+        let content = client
+            .media()
+            .get_media_content(&media_request, false)
+            .await
+            .context("Could not get decrypted data")?;
+        let filename = body.rsplit_once('/').map(|(_, f)| f).unwrap_or(body);
+        let dir = PathBuf::from(dir_path);
+        if !dir.is_dir() {
+            fs::DirBuilder::new()
+                .mode(0o700)
+                .recursive(true)
+                .create(&dir)
+                .await?
         }
+        let file = dir.join(filename);
+        fs::File::create(file).await?.write_all(&content).await?;
+        let url = args().media_url.as_ref().unwrap_or(dir_path);
+        Ok(format!(
+            "{}/{}",
+            url,
+            utf8_percent_encode(filename, FRAGMENT)
+        ))
     }
 }
 
