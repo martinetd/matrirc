@@ -6,7 +6,7 @@ use matrix_sdk::{
     media::{MediaFormat, MediaRequestParameters},
     room::Room,
     ruma::events::room::{
-        message::{MessageType, OriginalSyncRoomMessageEvent},
+        message::{MessageType, OriginalSyncRoomMessageEvent, Relation},
         MediaSource,
     },
     Client, RoomState,
@@ -87,22 +87,26 @@ async fn process_message_like_to_str(
         .localtime()
         .map(|d| format!("<{}> ", d))
         .unwrap_or_default();
+    let thread = match &event.content.relates_to {
+        Some(Relation::Thread(_)) => "<th> ",
+        _ => "",
+    };
+    let prefix = time_prefix + thread;
 
     match &event.content.msgtype {
-        MessageType::Text(text_content) => (
-            time_prefix + text_content.body.as_str(),
-            IrcMessageType::Privmsg,
-        ),
+        MessageType::Text(text_content) => {
+            (prefix + text_content.body.as_str(), IrcMessageType::Privmsg)
+        }
         MessageType::Emote(emote_content) => (
-            format!("\u{001}ACTION {}{}", time_prefix, emote_content.body),
+            format!("\u{001}ACTION {}{}", prefix, emote_content.body),
             IrcMessageType::Privmsg,
         ),
         MessageType::Notice(notice_content) => (
-            time_prefix + notice_content.body.as_str(),
+            prefix + notice_content.body.as_str(),
             IrcMessageType::Notice,
         ),
         MessageType::ServerNotice(snotice_content) => (
-            time_prefix + snotice_content.body.as_str(),
+            prefix + snotice_content.body.as_str(),
             IrcMessageType::Notice,
         ),
         MessageType::File(file_content) => {
@@ -112,10 +116,7 @@ async fn process_message_like_to_str(
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
-                format!(
-                    "{}Sent a file, {}: {}",
-                    time_prefix, &file_content.body, url
-                ),
+                format!("{}Sent a file, {}: {}", prefix, &file_content.body, url),
                 IrcMessageType::Notice,
             )
         }
@@ -126,10 +127,7 @@ async fn process_message_like_to_str(
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
-                format!(
-                    "{}Sent an image, {}: {}",
-                    time_prefix, &image_content.body, url
-                ),
+                format!("{}Sent an image, {}: {}", prefix, &image_content.body, url),
                 IrcMessageType::Notice,
             )
         }
@@ -140,10 +138,7 @@ async fn process_message_like_to_str(
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
-                format!(
-                    "{}Sent a video, {}: {}",
-                    time_prefix, &video_content.body, url
-                ),
+                format!("{}Sent a video, {}: {}", prefix, &video_content.body, url),
                 IrcMessageType::Notice,
             )
         }
@@ -154,10 +149,7 @@ async fn process_message_like_to_str(
                 .await
                 .unwrap_or_else(|e| format!("{}", e));
             (
-                format!(
-                    "{}Sent audio, {}: {}",
-                    time_prefix, &audio_content.body, url
-                ),
+                format!("{}Sent audio, {}: {}", prefix, &audio_content.body, url),
                 IrcMessageType::Notice,
             )
         }
@@ -168,15 +160,12 @@ async fn process_message_like_to_str(
             {
                 warn!("Verif failed: {}", e);
                 (
-                    format!(
-                        "{}Sent a verification request, but failed: {}",
-                        time_prefix, e
-                    ),
+                    format!("{}Sent a verification request, but failed: {}", prefix, e),
                     IrcMessageType::Notice,
                 )
             } else {
                 (
-                    format!("{}Sent a verification request", time_prefix),
+                    format!("{}Sent a verification request", prefix),
                     IrcMessageType::Notice,
                 )
             }
@@ -189,13 +178,7 @@ async fn process_message_like_to_str(
                 ""
             };
             (
-                format!(
-                    "{}Sent {}{}: {}",
-                    time_prefix,
-                    msg.msgtype(),
-                    data,
-                    msg.body()
-                ),
+                format!("{}Sent {}{}: {}", prefix, msg.msgtype(), data, msg.body()),
                 IrcMessageType::Privmsg,
             )
         }
