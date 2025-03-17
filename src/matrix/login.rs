@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use log::debug;
 use matrix_sdk::{
-    authentication::matrix::{MatrixSession, MatrixSessionTokens},
+    matrix_auth::{MatrixSession, MatrixSessionTokens},
     Client, SessionMeta,
 };
 use std::path::Path;
