@@ -162,6 +162,29 @@ pub async fn ircd_sync_write(
     Ok(())
 }
 
+pub async fn join_channels(
+    matrirc: &Matrirc
+) -> Result<()> {
+    let irc = matrirc.irc();
+    let matrix = matrirc.matrix();
+    let mapping = matrirc.mappings();
+
+    for joined in matrix.joined_rooms() {
+        if joined.is_tombstoned() {
+            trace!(
+                "Skipping tombstoned {}",
+                joined
+                    .name()
+                    .unwrap_or_else(|| joined.room_id().to_string())
+            );
+            continue;
+        }
+        let roomtarget = mapping.try_room_target(&joined).await?;
+        roomtarget.join_chan(&irc).await;
+    }
+    Ok(())
+}
+
 pub async fn ircd_sync_read(
     mut reader: SplitStream<Framed<TcpStream, IrcCodec>>,
     matrirc: Matrirc,

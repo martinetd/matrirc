@@ -56,8 +56,8 @@ pub struct RoomTarget {
     inner: Arc<RwLock<RoomTargetInner>>,
 }
 
-#[derive(Debug, PartialEq)]
-enum RoomTargetType {
+#[derive(Debug, PartialEq, Clone)]
+pub enum RoomTargetType {
     /// room maps to a query e.g. single other member (or alone!)
     Query,
     /// room maps to a chan, and irc side has it joined
@@ -214,17 +214,17 @@ impl RoomTarget {
         self.inner.read().await.target.clone()
     }
 
-    async fn join_chan(&self, irc: &IrcClient) -> bool {
+    pub async fn join_chan(&self, irc: &IrcClient) -> bool {
         let mut lock = self.inner.write().await;
-        match &lock.target_type {
-            RoomTargetType::LeftChan => (),
-            RoomTargetType::Query => (),
+        let prefix = match &lock.target_type {
+            RoomTargetType::LeftChan => "",
+            RoomTargetType::Query => "#",
             // got raced or already joined
             RoomTargetType::JoiningChan => return false,
             RoomTargetType::Chan => return false,
         };
         lock.target_type = RoomTargetType::JoiningChan;
-        let chan = format!("#{}", lock.target);
+        let chan = format!("{}{}", prefix, lock.target);
         drop(lock);
 
         // we need to initate the join before getting members in another task
@@ -458,7 +458,7 @@ impl Mappings {
     // long enough to check for deduplicate and it's a bit of a mess; it could be done
     // with a more generic 'insert_free_target' that takes a couple of callbacks but
     // it's just not worth it
-    async fn try_room_target(&self, room: &Room) -> Result<RoomTarget> {
+    pub async fn try_room_target(&self, room: &Room) -> Result<RoomTarget> {
         // happy case first
         if let Some(target) = self.inner.read().await.rooms.get(room.room_id()) {
             return Ok(target.clone());
