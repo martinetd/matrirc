@@ -222,6 +222,10 @@ pub async fn ircd_sync_read(
                     }
                 }
             }
+            Command::QUIT(msg) => {
+                info!("QUIT {}", msg.unwrap_or_default());
+                break;
+            }
             Command::ChannelMODE(chan, modes) if modes.is_empty() => {
                 if let Err(e) = matrirc
                     .irc()
