@@ -1,5 +1,11 @@
-on: push
 name: simple CI
+on:
+    pull_request_target:
+        types:
+            - opened
+            - edited
+            - synchronize
+    push:
 
 env:
   RUSTFLAGS: "-Dwarnings"
