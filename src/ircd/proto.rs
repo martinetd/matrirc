@@ -4,14 +4,14 @@ use futures::{SinkExt, StreamExt};
 use irc::client::prelude::{Command, Message, Prefix};
 use irc::proto::{ChannelMode, IrcCodec, Mode};
 use log::{info, trace, warn};
+use matrix_sdk::RoomMemberships;
 use std::cmp::min;
 use std::time::SystemTime;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
-use matrix_sdk::RoomMemberships;
 
-use crate::{matrirc::Matrirc, matrix::MatrixMessageType, matrix::room_mappings::RoomTargetType};
+use crate::{matrirc::Matrirc, matrix::room_mappings::RoomTargetType, matrix::MatrixMessageType};
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
 /// so these types wrap it around a bit
@@ -163,17 +163,17 @@ pub async fn ircd_sync_write(
     Ok(())
 }
 
-pub async fn list_channels(
-    target: &str,
-    matrirc: &Matrirc
-) -> Result<()> {
+pub async fn list_channels(target: &str, matrirc: &Matrirc) -> Result<()> {
     warn!("Running /list handler");
     let irc = matrirc.irc();
     let matrix = matrirc.matrix();
     let mapping = matrirc.mappings();
 
-    irc.send(raw_msg(format!(":matrirc 321 {} Channel :Users  Name", target)))
-       .await?;
+    irc.send(raw_msg(format!(
+        ":matrirc 321 {} Channel :Users  Name",
+        target
+    )))
+    .await?;
     for joined in matrix.joined_rooms() {
         if joined.is_tombstoned() {
             trace!(
@@ -193,11 +193,14 @@ pub async fn list_channels(
         };
         let users = joined.members_no_sync(RoomMemberships::ACTIVE).await?.len();
         let topic = joined.topic().unwrap_or_else(|| "".to_string());
-        irc.send(raw_msg(format!(":matrirc 322 {} {}{} {} :{}", target, prefix, channame, users, topic)))
-           .await?;
+        irc.send(raw_msg(format!(
+            ":matrirc 322 {} {}{} {} :{}",
+            target, prefix, channame, users, topic
+        )))
+        .await?;
     }
     irc.send(raw_msg(format!(":matrirc 323 {} :End of /LIST", target)))
-       .await?;
+        .await?;
     Ok(())
 }
 
@@ -308,7 +311,8 @@ pub async fn ircd_sync_read(
                 }
             }
             Command::LIST(_, _) => {
-                if let Err(e) = list_channels(message.response_target().unwrap_or("matrirc"), &matrirc).await
+                if let Err(e) =
+                    list_channels(message.response_target().unwrap_or("matrirc"), &matrirc).await
                 {
                     warn!("Could not list channels: {:?}", e)
                 }
