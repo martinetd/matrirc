@@ -217,8 +217,8 @@ impl RoomTarget {
     pub async fn join_chan(&self, irc: &IrcClient) -> bool {
         let mut lock = self.inner.write().await;
         let prefix = match &lock.target_type {
-            RoomTargetType::LeftChan => "",
-            RoomTargetType::Query => "#",
+            RoomTargetType::LeftChan => "#",
+            RoomTargetType::Query => "",
             // got raced or already joined
             RoomTargetType::JoiningChan => return false,
             RoomTargetType::Chan => return false,
