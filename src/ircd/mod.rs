@@ -91,8 +91,6 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
         .await?;
 
-    proto::join_channels(&matrirc).await?;
-
     if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {
         info!("irc read task failed: {:?}", e);
     }
