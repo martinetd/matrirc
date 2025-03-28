@@ -192,7 +192,7 @@ pub async fn list_channels(target: &str, matrirc: &Matrirc) -> Result<()> {
             _ => "#",
         };
         let users = joined.members_no_sync(RoomMemberships::ACTIVE).await?.len();
-        let topic = joined.topic().unwrap_or_else(|| "".to_string());
+        let topic = joined.topic().unwrap_or_default();
         irc.send(raw_msg(format!(
             ":matrirc 322 {} {}{} {} :{}",
             target, prefix, channame, users, topic
