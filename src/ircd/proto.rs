@@ -178,7 +178,7 @@ pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
             continue;
         }
         let roomtarget = mapping.try_room_target(&joined).await?;
-        roomtarget.join_chan(&irc).await;
+        roomtarget.join_chan(irc).await;
     }
     Ok(())
 }
