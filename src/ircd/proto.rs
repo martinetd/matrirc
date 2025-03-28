@@ -162,9 +162,7 @@ pub async fn ircd_sync_write(
     Ok(())
 }
 
-pub async fn join_channels(
-    matrirc: &Matrirc
-) -> Result<()> {
+pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
     let irc = matrirc.irc();
     let matrix = matrirc.matrix();
     let mapping = matrirc.mappings();
