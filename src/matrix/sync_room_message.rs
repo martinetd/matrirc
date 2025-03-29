@@ -12,7 +12,9 @@ use matrix_sdk::{
     Client, RoomState,
 };
 use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
-use std::path::PathBuf;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 
@@ -24,6 +26,37 @@ use crate::matrix::verification::handle_verification_request;
 
 /// https://url.spec.whatwg.org/#fragment-percent-encode-set
 const FRAGMENT: &AsciiSet = &CONTROLS.add(b' ').add(b'"').add(b'<').add(b'>').add(b'`');
+
+async fn generate_fresh_file(dir: PathBuf, filename: &str) -> Result<(tokio::fs::File, String)> {
+    let filename = Path::new(filename);
+    let prefix = filename
+        .file_stem()
+        .and_then(OsStr::to_str)
+        .map(|s| format!("{}-", s))
+        .unwrap_or_else(|| "noname-".to_string());
+    let suffix = filename
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|s| format!(".{}", s))
+        .unwrap_or_default();
+
+    tokio::task::spawn_blocking(move || {
+        let (filehandle, filepath) = tempfile::Builder::new()
+            .prefix(&prefix)
+            .suffix(&suffix)
+            .tempfile_in(dir)?
+            .keep()?;
+
+        let fresh_filename = filepath
+            .file_name()
+            .context("Internal error: No filename component")?
+            .to_str()
+            .context("Internal error: Non-utf8 filename")?
+            .to_owned();
+        Ok((tokio::fs::File::from(filehandle), fresh_filename))
+    })
+    .await?
+}
 
 #[async_trait]
 pub trait SourceUri {
@@ -54,12 +87,28 @@ impl SourceUri for MediaSource {
                 .await?
         }
         let file = dir.join(filename);
-        fs::File::create(file).await?.write_all(&content).await?;
+        let plainfh = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(file)
+            .await;
+        let outfiletuple = match plainfh {
+            Ok(fh) => Ok((fh, filename.to_owned())),
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    generate_fresh_file(dir, filename).await
+                } else {
+                    Err(anyhow::Error::from(err))
+                }
+            }
+        };
+        let (mut fh, filename) = outfiletuple?;
+        fh.write_all(&content).await?;
         let url = args().media_url.as_ref().unwrap_or(dir_path);
         Ok(format!(
             "{}/{}",
             url,
-            utf8_percent_encode(filename, FRAGMENT)
+            utf8_percent_encode(&filename, FRAGMENT)
         ))
     }
 }

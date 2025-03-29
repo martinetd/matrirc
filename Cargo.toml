@@ -32,5 +32,6 @@ rand_core = { version = "0.9", features = ["os_rng"] }
 regex = "1.8"
 serde = "1.0"
 serde_json = "1.0"
+tempfile = "3.19.1"
 tokio = { version = "1.0.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
