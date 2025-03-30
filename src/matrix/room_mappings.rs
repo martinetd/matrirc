@@ -56,8 +56,8 @@ pub struct RoomTarget {
     inner: Arc<RwLock<RoomTargetInner>>,
 }
 
-#[derive(Debug, PartialEq)]
-enum RoomTargetType {
+#[derive(Debug, PartialEq, Clone)]
+pub enum RoomTargetType {
     /// room maps to a query e.g. single other member (or alone!)
     Query,
     /// room maps to a chan, and irc side has it joined
@@ -212,6 +212,9 @@ impl RoomTarget {
     }
     pub async fn target(&self) -> String {
         self.inner.read().await.target.clone()
+    }
+    pub async fn target_type(&self) -> RoomTargetType {
+        self.inner.read().await.target_type.clone()
     }
 
     async fn join_chan(&self, irc: &IrcClient) -> bool {
