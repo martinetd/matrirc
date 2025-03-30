@@ -213,6 +213,9 @@ impl RoomTarget {
     pub async fn target(&self) -> String {
         self.inner.read().await.target.clone()
     }
+    pub async fn target_type(&self) -> RoomTargetType {
+        self.inner.read().await.target_type.clone()
+    }
 
     pub async fn join_chan(&self, irc: &IrcClient) -> bool {
         let mut lock = self.inner.write().await;
