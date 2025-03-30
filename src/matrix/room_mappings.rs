@@ -461,7 +461,7 @@ impl Mappings {
     // long enough to check for deduplicate and it's a bit of a mess; it could be done
     // with a more generic 'insert_free_target' that takes a couple of callbacks but
     // it's just not worth it
-    async fn try_room_target(&self, room: &Room) -> Result<RoomTarget> {
+    pub async fn try_room_target(&self, room: &Room) -> Result<RoomTarget> {
         // happy case first
         if let Some(target) = self.inner.read().await.rooms.get(room.room_id()) {
             return Ok(target.clone());

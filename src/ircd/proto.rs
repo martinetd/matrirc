@@ -9,8 +9,9 @@ use std::time::SystemTime;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
+use matrix_sdk::RoomMemberships;
 
-use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
+use crate::{matrirc::Matrirc, matrix::MatrixMessageType, matrix::room_mappings::RoomTargetType};
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
 /// so these types wrap it around a bit
@@ -162,6 +163,44 @@ pub async fn ircd_sync_write(
     Ok(())
 }
 
+pub async fn list_channels(
+    target: &str,
+    matrirc: &Matrirc
+) -> Result<()> {
+    warn!("Running /list handler");
+    let irc = matrirc.irc();
+    let matrix = matrirc.matrix();
+    let mapping = matrirc.mappings();
+
+    irc.send(raw_msg(format!(":matrirc 321 {} Channel :Users  Name", target)))
+       .await?;
+    for joined in matrix.joined_rooms() {
+        if joined.is_tombstoned() {
+            trace!(
+                "Skipping tombstoned {}",
+                joined
+                    .name()
+                    .unwrap_or_else(|| joined.room_id().to_string())
+            );
+            continue;
+        }
+        let roomtarget = mapping.try_room_target(&joined).await?;
+        let chantype = roomtarget.target_type().await;
+        let channame = roomtarget.target().await;
+        let prefix = match &chantype {
+            RoomTargetType::Query => "",
+            _ => "#",
+        };
+        let users = joined.members_no_sync(RoomMemberships::ACTIVE).await?.len();
+        let topic = joined.topic().unwrap_or_else(|| "".to_string());
+        irc.send(raw_msg(format!(":matrirc 322 {} {}{} {} :{}", target, prefix, channame, users, topic)))
+           .await?;
+    }
+    irc.send(raw_msg(format!(":matrirc 323 {} :End of /LIST", target)))
+       .await?;
+    Ok(())
+}
+
 pub async fn ircd_sync_read(
     mut reader: SplitStream<Framed<TcpStream, IrcCodec>>,
     matrirc: Matrirc,
@@ -266,6 +305,12 @@ pub async fn ircd_sync_read(
                     .await
                 {
                     warn!("Could not reply to mode: {:?}", e)
+                }
+            }
+            Command::LIST(_, _) => {
+                if let Err(e) = list_channels(message.response_target().unwrap_or("matrirc"), &matrirc).await
+                {
+                    warn!("Could not list channels: {:?}", e)
                 }
             }
             _ => info!("Unhandled message {:?}", message),
