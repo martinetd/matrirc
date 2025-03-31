@@ -164,7 +164,6 @@ pub async fn ircd_sync_write(
 }
 
 pub async fn list_channels(target: &str, matrirc: &Matrirc) -> Result<()> {
-    warn!("Running /list handler");
     let irc = matrirc.irc();
     let matrix = matrirc.matrix();
     let mapping = matrirc.mappings();
@@ -187,17 +186,15 @@ pub async fn list_channels(target: &str, matrirc: &Matrirc) -> Result<()> {
         let roomtarget = mapping.try_room_target(&joined).await?;
         let chantype = roomtarget.target_type().await;
         let channame = roomtarget.target().await;
-        let prefix = match &chantype {
-            RoomTargetType::Query => "",
-            _ => "#",
-        };
-        let users = joined.members_no_sync(RoomMemberships::ACTIVE).await?.len();
-        let topic = joined.topic().unwrap_or_default();
-        irc.send(raw_msg(format!(
-            ":matrirc 322 {} {}{} {} :{}",
-            target, prefix, channame, users, topic
-        )))
-        .await?;
+        if chantype != RoomTargetType::Query {
+            let users = joined.members_no_sync(RoomMemberships::ACTIVE).await?.len();
+            let topic = joined.topic().unwrap_or_default();
+            irc.send(raw_msg(format!(
+                ":matrirc 322 {} #{} {} :{}",
+                target, channame, users, topic
+            )))
+            .await?;
+        }
     }
     irc.send(raw_msg(format!(":matrirc 323 {} :End of /LIST", target)))
         .await?;
