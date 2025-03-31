@@ -90,6 +90,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         .irc()
         .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
         .await?;
+
     if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {
         info!("irc read task failed: {:?}", e);
     }

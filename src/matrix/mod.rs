@@ -2,6 +2,7 @@ use anyhow::Result;
 use log::warn;
 use matrix_sdk::{config::SyncSettings, LoopCtrl};
 
+use crate::ircd::proto;
 use crate::matrirc::{Matrirc, Running};
 
 mod invite;
@@ -38,7 +39,13 @@ pub async fn matrix_sync(matrirc: Matrirc) -> Result<()> {
                         // XXX send to irc
                         Ok(LoopCtrl::Break)
                     } else {
-                        Ok(LoopCtrl::Continue)
+                        match proto::join_channels(loop_matrirc).await {
+                            Ok(_) => Ok(LoopCtrl::Continue),
+                            Err(e) => {
+                                warn!("Failed to autojoin rooms in IRC: {}", e);
+                                Ok(LoopCtrl::Break)
+                            }
+                        }
                     }
                 }
                 Running::Continue => Ok(LoopCtrl::Continue),
