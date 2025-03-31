@@ -30,7 +30,7 @@ matrix-sdk = { version = "0.8", features = ["anyhow", "sso-login"] }
 percent-encoding = "2.3.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
 regex = "1.8"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0.0", features = ["full"] }
 tokio-util = { version = "0.7", features = ["codec"] }
