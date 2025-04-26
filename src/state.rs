@@ -162,7 +162,7 @@ pub fn login(nick: &str, pass: &str) -> Result<Option<Session>> {
 mod tests {
     use super::*;
     use matrix_sdk::{
-        matrix_auth::{MatrixSession, MatrixSessionTokens},
+        authentication::matrix::{MatrixSession, MatrixSessionTokens},
         SessionMeta,
     };
 
