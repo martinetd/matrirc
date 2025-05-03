@@ -165,10 +165,6 @@ pub async fn ircd_sync_write(
 }
 
 pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
-    if args().autojoin == AutoJoinOptions::None {
-        return Ok(());
-    }
-
     let irc = matrirc.irc();
     let matrix = matrirc.matrix();
     let mapping = matrirc.mappings();
@@ -189,14 +185,18 @@ pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
             && args().autojoin.join_channels()
         {
             roomtarget.join_chan(irc).await;
-        } else if chantype == RoomTargetType::Query && args().autojoin.join_queries() {
-            let _ = irc
-                .send(privmsg(
-                    roomtarget.target().await,
-                    &irc.nick,
-                    "* <Resumed connection to matrirc>",
-                ))
-                .await;
+        } else if chantype == RoomTargetType::Query {
+            let name = roomtarget.target().await;
+            let _ = irc.send(join(Some(format!("{}!{}@matrirc", name, name)), "matrirc".to_string())).await?;
+            if args().autojoin.join_queries() {
+                let _ = irc
+                    .send(privmsg(
+                            name,
+                            &irc.nick,
+                            "* <Resumed connection to matrirc>",
+                    ))
+                    .await;
+            }
         }
     }
     Ok(())
