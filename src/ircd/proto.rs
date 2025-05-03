@@ -10,6 +10,8 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
+use crate::args::{args, AutoJoinOptions};
+use crate::matrix::room_mappings::RoomTargetType;
 use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
 
 /// it's a bit of a pain to redo the work twice for notice/privmsg,
@@ -159,6 +161,44 @@ pub async fn ircd_sync_write(
         }
     }
     info!("Stopping write task to sink closed");
+    Ok(())
+}
+
+pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
+    let irc = matrirc.irc();
+    let matrix = matrirc.matrix();
+    let mapping = matrirc.mappings();
+
+    for joined in matrix.joined_rooms() {
+        if joined.is_tombstoned() {
+            trace!(
+                "Skipping tombstoned {}",
+                joined
+                    .name()
+                    .unwrap_or_else(|| joined.room_id().to_string())
+            );
+            continue;
+        }
+        let roomtarget = mapping.try_room_target(&joined).await?;
+        let chantype = roomtarget.target_type().await;
+        if [RoomTargetType::Chan, RoomTargetType::LeftChan].contains(&chantype)
+            && args().autojoin.join_channels()
+        {
+            roomtarget.join_chan(irc).await;
+        } else if chantype == RoomTargetType::Query {
+            let name = roomtarget.target().await;
+            let _ = irc.send(join(Some(format!("{}!{}@matrirc", name, name)), "matrirc".to_string())).await?;
+            if args().autojoin.join_queries() {
+                let _ = irc
+                    .send(privmsg(
+                            name,
+                            &irc.nick,
+                            "* <Resumed connection to matrirc>",
+                    ))
+                    .await;
+            }
+        }
+    }
     Ok(())
 }
 
