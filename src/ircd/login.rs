@@ -1,5 +1,6 @@
 use anyhow::{Context, Error, Result};
 use irc::{client::prelude::Command, proto::IrcCodec};
+use crate::ircd::proto::{join, raw_msg};
 use log::{debug, info, trace, warn};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -53,6 +54,22 @@ pub async fn auth_loop(
         )))
         .await?;
     info!("Processing login from {}!{}", nick, user);
+    // Promote matric to chan
+    let matrircchan = "matrirc".to_string();
+    stream
+        .send(join(
+            Some(format!("{}!{}@matrirc", nick, user)),
+            "matrirc".to_string(),
+        ))
+        .await?;
+    stream
+        .send(join(
+            Some(format!("{}!{}@matrirc", nick, user)),
+            "matrirc".to_string(),
+        ))
+        .await?;
+    stream.send(raw_msg(format!(":matrirc 353 {} = {} :@matrirc", nick, matrircchan))).await?;
+    stream.send(raw_msg(format!(":matrirc 366 {} {} :End", nick, matrircchan))).await?;
     let client = match state::login(&nick, &pass)? {
         Some(session) => matrix_restore_session(stream, &nick, &pass, session).await?,
         None => matrix_login_loop(stream, &nick, &pass).await?,
