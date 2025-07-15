@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use crate::args::args;
-use crate::ircd::join_irc_chan;
+use crate::ircd::{join_irc_chan, MATRIRC_CHAN, MATRIRC_USER};
 use crate::matrix::room_mappings::RoomTargetType;
 use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
 
@@ -230,13 +230,16 @@ pub async fn ircd_sync_read(
                     .await
                 {
                     warn!("Could not forward message: {:?}", e);
+                    let (from, target) = {
+                        if let Some(target) = message.response_target() {
+                            (matrirc.irc().nick.as_str(), target)
+                        } else {
+                            (MATRIRC_CHAN, MATRIRC_USER)
+                        }
+                    };
                     if let Err(e2) = matrirc
                         .irc()
-                        .send(notice(
-                            &matrirc.irc().nick,
-                            message.response_target().unwrap_or("matrirc"),
-                            format!("Could not forward: {}", e),
-                        ))
+                        .send(notice(from, target, format!("Could not forward: {e}")))
                         .await
                     {
                         warn!("Furthermore, reply errored too: {:?}", e2);
@@ -250,13 +253,16 @@ pub async fn ircd_sync_read(
                     .await
                 {
                     warn!("Could not forward message: {:?}", e);
+                    let (from, target) = {
+                        if let Some(target) = message.response_target() {
+                            (matrirc.irc().nick.as_str(), target)
+                        } else {
+                            (MATRIRC_CHAN, MATRIRC_USER)
+                        }
+                    };
                     if let Err(e2) = matrirc
                         .irc()
-                        .send(notice(
-                            &matrirc.irc().nick,
-                            message.response_target().unwrap_or("matrirc"),
-                            format!("Could not forward: {}", e),
-                        ))
+                        .send(notice(from, target, format!("Could not forward: {e}")))
                         .await
                     {
                         warn!("Furthermore, reply errored too: {:?}", e2);

@@ -14,6 +14,7 @@ use matrix_sdk::{
 };
 
 use crate::ircd::proto::{join, raw_msg};
+use crate::ircd::{MATRIRC_CHAN, MATRIRC_USER};
 use crate::{ircd::proto, matrix, state};
 
 pub async fn auth_loop(
@@ -45,31 +46,29 @@ pub async fn auth_loop(
     let (Some(nick), Some(user), Some(pass)) = (client_nick, client_user, client_pass) else {
         return Err(Error::msg("nick or pass wasn't set for client!"));
     };
-    // need this to be able to interact with irssi: send welcome before any
-    // privmsg exchange even if login isn't over.
+    // Create matrirc channel to interact from irc
+    info!("Processing login from {}!{}", nick, user);
     stream
-        .send(proto::raw_msg(format!(
-            ":matrirc 001 {} :Welcome to matrirc",
-            nick
+        .send(join(
+            Some("matrirc!matrirc@matrirc".to_string()),
+            MATRIRC_CHAN,
+        ))
+        .await?;
+    stream
+        .send(raw_msg(format!(
+            ":matrirc 353 {nick} = {MATRIRC_CHAN} :@matrirc @{nick}"
         )))
         .await?;
-    info!("Processing login from {}!{}", nick, user);
-    // Promote matric to chan
-    let matrircchan = "matrirc".to_string();
     stream
-        .send(join(
-            Some(format!("{}!{}@matrirc", nick, user)),
-            "matrirc".to_string(),
-        ))
+        .send(raw_msg(format!(":matrirc 366 {nick} {MATRIRC_CHAN} :End")))
         .await?;
     stream
-        .send(join(
-            Some(format!("{}!{}@matrirc", nick, user)),
-            "matrirc".to_string(),
+        .send(proto::privmsg(
+            MATRIRC_CHAN,
+            MATRIRC_USER,
+            "Welcome to matrirc",
         ))
         .await?;
-    stream.send(raw_msg(format!(":matrirc 353 {} = {} :@matrirc", nick, matrircchan))).await?;
-    stream.send(raw_msg(format!(":matrirc 366 {} {} :End", nick, matrircchan))).await?;
     let client = match state::login(&nick, &pass)? {
         Some(session) => matrix_restore_session(stream, &nick, &pass, session).await?,
         None => matrix_login_loop(stream, &nick, &pass).await?,
@@ -110,8 +109,8 @@ async fn matrix_login_choices(
     state
         .stream
         .send(proto::privmsg(
-            "matrirc",
-            state.nick,
+            MATRIRC_CHAN,
+            MATRIRC_USER,
             format!(
                 "Found server at {}; complete connection with one the following:",
                 &homeserver
@@ -121,7 +120,11 @@ async fn matrix_login_choices(
 
     state
         .stream
-        .send(proto::privmsg("matrirc", state.nick, "reset (start over)"))
+        .send(proto::privmsg(
+            MATRIRC_CHAN,
+            MATRIRC_USER,
+            "reset (start over)",
+        ))
         .await?;
 
     let mut choices = vec![];
@@ -133,8 +136,8 @@ async fn matrix_login_choices(
                 state
                     .stream
                     .send(proto::privmsg(
-                        "matrirc",
-                        state.nick,
+                        MATRIRC_CHAN,
+                        MATRIRC_USER,
                         "password <user> <pass>",
                     ))
                     .await?
@@ -144,7 +147,7 @@ async fn matrix_login_choices(
                     choices.push(LoginChoice::Sso(None));
                     state
                         .stream
-                        .send(proto::privmsg("matrirc", state.nick, "sso"))
+                        .send(proto::privmsg(MATRIRC_CHAN, MATRIRC_USER, "sso"))
                         .await?;
                 } else {
                     for idp in &sso.identity_providers {
@@ -152,8 +155,8 @@ async fn matrix_login_choices(
                         state
                             .stream
                             .send(proto::privmsg(
-                                "matrirc",
-                                state.nick,
+                                MATRIRC_CHAN,
+                                MATRIRC_USER,
                                 format!("sso {}", &idp.id),
                             ))
                             .await?;
@@ -181,9 +184,9 @@ async fn matrix_login_password(
     state
         .stream
         .send(proto::privmsg(
-            "matrirc",
-            state.nick,
-            format!("Attempting to login to {} with {}", homeserver, user),
+            MATRIRC_CHAN,
+            MATRIRC_USER,
+            format!("Attempting to login to {homeserver} with {user}"),
         ))
         .await?;
     debug!("Logging in to matrix for {} (user {})", state.nick, user);
@@ -208,8 +211,8 @@ async fn matrix_login_sso(
         state
             .stream
             .send(proto::privmsg(
-                "matrirc",
-                state.nick,
+                MATRIRC_CHAN,
+                MATRIRC_USER,
                 "invalid idp for sso, try again",
             ))
             .await?;
@@ -235,8 +238,8 @@ async fn matrix_login_sso(
             state
                 .stream
                 .send(proto::privmsg(
-                    "matrirc",
-                    state.nick,
+                    MATRIRC_CHAN,
+                    MATRIRC_USER,
                     format!("Login at this URL: {url}"),
                 ))
                 .await?
@@ -245,8 +248,8 @@ async fn matrix_login_sso(
             state
                 .stream
                 .send(proto::privmsg(
-                    "matrirc",
-                    state.nick,
+                    MATRIRC_CHAN,
+                    MATRIRC_USER,
                     format!("Could not get login url: {e:?}"),
                 ))
                 .await?;
@@ -282,8 +285,8 @@ async fn matrix_login_state(
                     state
                         .stream
                         .send(proto::privmsg(
-                            "matrirc",
-                            state.nick,
+                            MATRIRC_CHAN,
+                            MATRIRC_USER,
                             "Message not in <homeserver> [<user> <pass>] format, ignoring.",
                         ))
                         .await?;
@@ -297,8 +300,8 @@ async fn matrix_login_state(
                     state
                         .stream
                         .send(proto::privmsg(
-                            "matrirc",
-                            state.nick,
+                            MATRIRC_CHAN,
+                            MATRIRC_USER,
                             "Start over from: <homeserver> [<user> <pass>]",
                         ))
                         .await?;
@@ -317,8 +320,8 @@ async fn matrix_login_state(
                     state
                         .stream
                         .send(proto::privmsg(
-                            "matrirc",
-                            state.nick,
+                            MATRIRC_CHAN,
+                            MATRIRC_USER,
                             "Message not in recognized login format, try again (or 'reset')",
                         ))
                         .await?;
@@ -336,8 +339,7 @@ async fn matrix_login_loop(
     irc_pass: &str,
 ) -> Result<MatrixClient> {
     stream.send(proto::privmsg(
-        "matrirc",
-        nick,
+        MATRIRC_CHAN, MATRIRC_USER,
         "Welcome to matrirc. Please login to matrix by replying with: <homeserver> [<user> <pass>]",
     ))
     .await?;
@@ -380,16 +382,16 @@ async fn matrix_login_loop(
                         state
                             .stream
                             .send(proto::privmsg(
-                                "matrirc",
-                                nick,
+                                MATRIRC_CHAN,
+                                MATRIRC_USER,
                                 format!("Error: {err_string}."),
                             ))
                             .await?;
                         state
                             .stream
                             .send(proto::privmsg(
-                                "matrirc",
-                                nick,
+                                MATRIRC_CHAN,
+                                MATRIRC_USER,
                                 "Try again from <homeserver> [<user> <pass>]",
                             ))
                             .await?;
@@ -411,8 +413,8 @@ async fn matrix_restore_session(
 ) -> Result<MatrixClient> {
     stream
         .send(proto::privmsg(
-            "matrirc",
-            nick,
+            MATRIRC_CHAN,
+            MATRIRC_USER,
             format!(
                 "Welcome to matrirc. Restoring session to {}",
                 session.homeserver
@@ -431,11 +433,9 @@ async fn matrix_restore_session(
         Ok(client) => Ok(client),
         Err(e) => {
             stream.send(proto::privmsg(
-                "matrirc",
-                nick,
+                MATRIRC_CHAN, MATRIRC_USER,
                 format!(
-                    "Restoring session failed: {}. Login again as follow or try to reconnect later.",
-                    e
+                    "Restoring session failed: {e}. Login again as follow or try to reconnect later."
                 ),
             ))
             .await?;

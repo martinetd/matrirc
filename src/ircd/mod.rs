@@ -20,6 +20,9 @@ pub mod proto;
 pub use chan::{join_irc_chan, join_irc_chan_finish};
 pub use client::IrcClient;
 
+pub const MATRIRC_CHAN: &str = "#matrirc";
+pub const MATRIRC_USER: &str = "matrirc";
+
 pub async fn listen() -> tokio::task::JoinHandle<()> {
     info!("listening to {}", args().ircd_listen);
     let listener = TcpListener::bind(args().ircd_listen)
@@ -88,7 +91,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
     let reader_matrirc = matrirc.clone();
     matrirc
         .irc()
-        .send_privmsg("matrirc", &matrirc.irc().nick, "okay")
+        .send_privmsg(MATRIRC_CHAN, MATRIRC_USER, "okay")
         .await?;
 
     if let Err(e) = proto::ircd_sync_read(reader_stream, reader_matrirc).await {

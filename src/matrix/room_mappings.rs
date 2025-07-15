@@ -20,7 +20,7 @@ use crate::ircd;
 use crate::ircd::{
     join_irc_chan, join_irc_chan_finish,
     proto::{IrcMessage, IrcMessageType},
-    IrcClient,
+    IrcClient, MATRIRC_CHAN, MATRIRC_USER,
 };
 use crate::matrirc::Matrirc;
 
@@ -35,7 +35,7 @@ struct TargetMessage {
     /// privmsg or notice
     message_type: IrcMessageType,
     /// will be either from in channel, or added as prefix if different from query name
-    from: String,
+    from: Cow<'static, str>,
     /// actual message
     text: String,
 }
@@ -44,7 +44,7 @@ impl TargetMessage {
     fn new(message_type: IrcMessageType, from: String, text: String) -> Self {
         TargetMessage {
             message_type,
-            from,
+            from: from.into(),
             text,
         }
     }
@@ -312,7 +312,7 @@ impl RoomTarget {
             .await
             .push_back(TargetMessage::new(
                 IrcMessageType::Notice,
-                "matrirc".to_string(),
+                MATRIRC_USER.into(),
                 error,
             ));
         self
@@ -338,7 +338,7 @@ impl RoomTarget {
             // we could error on LeftChan but what's the point?
             RoomTargetInner { target, .. } => IrcMessage {
                 message_type: message.message_type,
-                from: message.from,
+                from: message.from.into(),
                 target: format!("#{}", target),
                 text: message.text,
             },
@@ -370,12 +370,7 @@ impl RoomTarget {
         let inner = self.inner.read().await;
         let message = TargetMessage {
             message_type,
-            from: inner
-                .members
-                .get(sender)
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned(sender.clone()))
-                .to_string(),
+            from: inner.members.get(sender).unwrap_or(sender).clone().into(),
             text: text.into(),
         };
         match inner.target_type {
@@ -417,7 +412,7 @@ impl Mappings {
         Mappings {
             inner: MappingsInner::default().into(),
             irc,
-            mt: RoomTarget::query("matrirc"),
+            mt: RoomTarget::new(RoomTargetType::Chan, MATRIRC_CHAN),
         }
     }
     pub async fn room_target(&self, room: &Room) -> RoomTarget {
