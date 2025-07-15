@@ -10,7 +10,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
-use crate::args::{args, AutoJoinOptions};
+use crate::args::args;
 use crate::matrix::room_mappings::RoomTargetType;
 use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
 
@@ -187,7 +187,7 @@ pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
             roomtarget.join_chan(irc).await;
         } else if chantype == RoomTargetType::Query {
             let name = roomtarget.target().await;
-            let _ = irc.send(join(Some(format!("{}!{}@matrirc", name, name)), "matrirc".to_string())).await?;
+            irc.send(join(Some(format!("{}!{}@matrirc", name, name)), "matrirc".to_string())).await?;
             if args().autojoin.join_queries() {
                 let _ = irc
                     .send(privmsg(
