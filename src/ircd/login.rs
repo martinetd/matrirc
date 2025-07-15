@@ -50,7 +50,7 @@ pub async fn auth_loop(
     info!("Processing login from {}!{}", nick, user);
     stream
         .send(join(
-            Some("matrirc!matrirc@matrirc".to_string()),
+            Some(format!("{nick}!{user}@matrirc")),
             MATRIRC_CHAN,
         ))
         .await?;
