@@ -116,20 +116,17 @@ pub async fn on_sync_reaction(
     let time_prefix = event
         .origin_server_ts
         .localtime()
-        .map(|d| format!("<{}> ", d))
+        .map(|d| format!("<{d}> "))
         .unwrap_or_default();
     let reaction = event.content.relates_to;
     let reaction_text = emoji::lookup_by_glyph::lookup(&reaction.key)
         .map(|e| format!("{} ({})", reaction.key, e.name))
         .unwrap_or(reaction.key.clone());
     let reacting_to = match get_message_from_event_id(&matrirc, &room, &reaction.event_id).await {
-        Err(e) => format!("<Could not retreive: {}>", e),
+        Err(e) => format!("<Could not retreive: {e}>"),
         Ok(m) => m,
     };
-    let message = format!(
-        "{}<Reacted to {}>: {}",
-        time_prefix, reacting_to, reaction_text
-    );
+    let message = format!("{time_prefix}<Reacted to {reacting_to}>: {reaction_text}");
     matrirc
         .message_put(event.event_id.clone(), message.clone())
         .await;
@@ -171,14 +168,14 @@ pub async fn on_sync_room_redaction(
     let time_prefix = event
         .origin_server_ts
         .localtime()
-        .map(|d| format!("<{}> ", d))
+        .map(|d| format!("<{d}> "))
         .unwrap_or_default();
     let reason = event.content.reason.as_deref().unwrap_or("(no reason)");
     let reacting_to = {
         match &event.redacts {
             None => "<Could not retreive: no redacted event id>".to_string(),
             Some(redacts) => match get_message_from_event_id(&matrirc, &room, redacts).await {
-                Err(e) => format!("<Could not retreive: {}>", e),
+                Err(e) => format!("<Could not retreive: {e}>"),
                 Ok(m) => m,
             },
         }
@@ -189,7 +186,7 @@ pub async fn on_sync_room_redaction(
             matrirc.irc(),
             IrcMessageType::Privmsg,
             &event.sender.into(),
-            format!("{}<Redacted {}>: {}", time_prefix, reacting_to, reason),
+            format!("{time_prefix}<Redacted {reacting_to}>: {reason}"),
         )
         .await?;
 

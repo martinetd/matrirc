@@ -190,13 +190,12 @@ pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
             let name = roomtarget.target().await;
             join_irc_chan(irc, &name, &name, MATRIRC_CHAN).await?;
             if args().autojoin.join_queries() {
-                let _ = irc
-                    .send(privmsg(
-                            name,
-                            &irc.nick,
-                            "* <Resumed connection to matrirc>",
-                    ))
-                    .await;
+                irc.send(privmsg(
+                    name,
+                    &irc.nick,
+                    "* <Resumed connection to matrirc>",
+                ))
+                .await?;
             }
         }
     }

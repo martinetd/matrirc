@@ -129,7 +129,7 @@ impl VerificationContext {
     }
     async fn sas_verification_handler(self, sas: SasVerification) {
         if let Err(e) = self.sas_verification_handler_(sas).await {
-            let _ = self.to_irc(format!("Error handling sas: {}", e)).await;
+            let _ = self.to_irc(format!("Error handling sas: {e}")).await;
         }
     }
 
@@ -164,7 +164,7 @@ impl VerificationContext {
     }
     async fn request_verification_handler(self) {
         if let Err(e) = self.request_verification_handler_().await {
-            let _ = self.to_irc(format!("Error handling verif: {}", e)).await;
+            let _ = self.to_irc(format!("Error handling verif: {e}")).await;
         }
     }
     async fn handle_confirm_start(&self, message: String) -> Result<()> {
@@ -267,8 +267,7 @@ pub async fn handle_verification_request(
     matrirc.mappings().insert_deduped("verif", &verif).await;
     verif
         .to_irc(format!(
-            "Got a verification request from {}, accept? [yes/no]",
-            sender
+            "Got a verification request from {sender}, accept? [yes/no]"
         ))
         .await?;
     Ok(())

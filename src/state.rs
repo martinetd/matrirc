@@ -154,7 +154,7 @@ pub fn login(nick: &str, pass: &str) -> Result<Option<Session>> {
     } else if args().allow_register {
         Ok(None)
     } else {
-        Err(Error::msg(format!("unknown user {}", nick)))
+        Err(Error::msg(format!("unknown user {nick}")))
     }
 }
 

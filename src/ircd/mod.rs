@@ -57,7 +57,7 @@ async fn handle_client(mut stream: Framed<TcpStream, IrcCodec>) -> Result<()> {
         Err(e) => {
             // keep original error, but try to tell client we're not ok
             let _ = stream
-                .send(proto::error(format!("Closing session: {}", e)))
+                .send(proto::error(format!("Closing session: {e}")))
                 .await;
             return Err(e);
         }

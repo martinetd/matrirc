@@ -156,7 +156,7 @@ impl<V> InsertDedup<V> for HashMap<String, V> {
                 return found;
             }
             count += 1;
-            key = format!("{}_{}", orig_key, count);
+            key = format!("{orig_key}_{count}");
         }
     }
 }
@@ -170,7 +170,7 @@ async fn fill_room_members(
     match members.len() {
         0 => {
             // XXX remove room from mappings, but this should never happen anyway
-            return Err(Error::msg(format!("Message in empty room {}?", room_name)));
+            return Err(Error::msg(format!("Message in empty room {room_name}?")));
         }
         // promote to chan if other member name isn't room name
         1 | 2 => {
@@ -339,7 +339,7 @@ impl RoomTarget {
             RoomTargetInner { target, .. } => IrcMessage {
                 message_type: message.message_type,
                 from: message.from.into(),
-                target: format!("#{}", target),
+                target: format!("#{target}"),
                 text: message.text,
             },
         }
@@ -422,7 +422,7 @@ impl Mappings {
                 // return error into matrirc channel instead
                 self.mt
                     .clone()
-                    .set_error(format!("Could not find or create target: {}", e))
+                    .set_error(format!("Could not find or create target: {e}"))
                     .await
             }
         }
@@ -506,7 +506,7 @@ impl Mappings {
         if let Some(target) = self.inner.read().await.targets.get(name) {
             target.handle_message(message_type, message).await
         } else {
-            Err(Error::msg(format!("No such target {}", name)))
+            Err(Error::msg(format!("No such target {name}")))
         }
     }
 

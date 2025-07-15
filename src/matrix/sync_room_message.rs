@@ -32,12 +32,12 @@ async fn generate_fresh_file(dir: PathBuf, filename: &str) -> Result<(tokio::fs:
     let prefix = filename
         .file_stem()
         .and_then(OsStr::to_str)
-        .map(|s| format!("{}-", s))
+        .map(|s| format!("{s}-"))
         .unwrap_or_else(|| "noname-".to_string());
     let suffix = filename
         .extension()
         .and_then(OsStr::to_str)
-        .map(|s| format!(".{}", s))
+        .map(|s| format!(".{s}"))
         .unwrap_or_default();
 
     tokio::task::spawn_blocking(move || {
@@ -120,7 +120,7 @@ async fn process_message_like_to_str(
     let time_prefix = event
         .origin_server_ts
         .localtime()
-        .map(|d| format!("<{}> ", d))
+        .map(|d| format!("<{d}> "))
         .unwrap_or_default();
     let thread = match &event.content.relates_to {
         Some(Relation::Thread(_)) => "<th> ",
@@ -149,7 +149,7 @@ async fn process_message_like_to_str(
                 .source
                 .to_uri(matrirc.matrix(), file_content.filename())
                 .await
-                .unwrap_or_else(|e| format!("{}", e));
+                .unwrap_or_else(|e| format!("{e}"));
             (
                 format!("{}Sent a file, {}: {}", prefix, &file_content.body, url),
                 IrcMessageType::Notice,
@@ -160,7 +160,7 @@ async fn process_message_like_to_str(
                 .source
                 .to_uri(matrirc.matrix(), image_content.filename())
                 .await
-                .unwrap_or_else(|e| format!("{}", e));
+                .unwrap_or_else(|e| format!("{e}"));
             (
                 format!("{}Sent an image, {}: {}", prefix, &image_content.body, url),
                 IrcMessageType::Notice,
@@ -171,7 +171,7 @@ async fn process_message_like_to_str(
                 .source
                 .to_uri(matrirc.matrix(), video_content.filename())
                 .await
-                .unwrap_or_else(|e| format!("{}", e));
+                .unwrap_or_else(|e| format!("{e}"));
             (
                 format!("{}Sent a video, {}: {}", prefix, &video_content.body, url),
                 IrcMessageType::Notice,
@@ -182,7 +182,7 @@ async fn process_message_like_to_str(
                 .source
                 .to_uri(matrirc.matrix(), audio_content.filename())
                 .await
-                .unwrap_or_else(|e| format!("{}", e));
+                .unwrap_or_else(|e| format!("{e}"));
             (
                 format!("{}Sent audio, {}: {}", prefix, &audio_content.body, url),
                 IrcMessageType::Notice,
@@ -195,12 +195,12 @@ async fn process_message_like_to_str(
             {
                 warn!("Verif failed: {}", e);
                 (
-                    format!("{}Sent a verification request, but failed: {}", prefix, e),
+                    format!("{prefix}Sent a verification request, but failed: {e}"),
                     IrcMessageType::Notice,
                 )
             } else {
                 (
-                    format!("{}Sent a verification request", prefix),
+                    format!("{prefix}Sent a verification request"),
                     IrcMessageType::Notice,
                 )
             }
