@@ -5,12 +5,9 @@ use crate::ircd::{
     IrcClient,
 };
 
-pub async fn join_irc_chan(irc: &IrcClient, chan: &str) -> Result<()> {
-    irc.send(join(
-        Some(format!("{}!{}@matrirc", irc.nick, irc.user)),
-        chan,
-    ))
-    .await
+pub async fn join_irc_chan(irc: &IrcClient, nick: &str, user: &str, chan: &str) -> Result<()> {
+    irc.send(join(Some(format!("{}!{}@matrirc", nick, user)), chan))
+        .await
 }
 
 pub async fn join_irc_chan_finish(

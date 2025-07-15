@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 use tokio_util::codec::Framed;
 
 use crate::args::args;
+use crate::ircd::join_irc_chan;
 use crate::matrix::room_mappings::RoomTargetType;
 use crate::{matrirc::Matrirc, matrix::MatrixMessageType};
 
@@ -187,7 +188,7 @@ pub async fn join_channels(matrirc: &Matrirc) -> Result<()> {
             roomtarget.join_chan(irc).await;
         } else if chantype == RoomTargetType::Query {
             let name = roomtarget.target().await;
-            irc.send(join(Some(format!("{}!{}@matrirc", name, name)), "matrirc".to_string())).await?;
+            join_irc_chan(irc, &name, &name, MATRIRC_CHAN).await?;
             if args().autojoin.join_queries() {
                 let _ = irc
                     .send(privmsg(

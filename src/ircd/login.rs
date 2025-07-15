@@ -1,6 +1,5 @@
 use anyhow::{Context, Error, Result};
 use irc::{client::prelude::Command, proto::IrcCodec};
-use crate::ircd::proto::{join, raw_msg};
 use log::{debug, info, trace, warn};
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -14,6 +13,7 @@ use matrix_sdk::{
     ruma::api::client::session::get_login_types::v3::LoginType, Client as MatrixClient,
 };
 
+use crate::ircd::proto::{join, raw_msg};
 use crate::{ircd::proto, matrix, state};
 
 pub async fn auth_loop(

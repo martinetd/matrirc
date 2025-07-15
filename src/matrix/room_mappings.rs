@@ -231,7 +231,7 @@ impl RoomTarget {
         drop(lock);
 
         // we need to initate the join before getting members in another task
-        if let Err(e) = join_irc_chan(irc, &chan).await {
+        if let Err(e) = join_irc_chan(irc, &irc.nick, &irc.user, &chan).await {
             warn!("Could not join irc: {e}");
             // XXX send message to irc through matrirc query
             return false;
